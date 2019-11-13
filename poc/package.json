@@ -1,0 +1,23 @@
+{
+  "name": "pernosco-tools-poc",
+  "version": "0.1.0",
+  "description": "",
+  "private": true,
+  "keywords": [],
+  "author": "",
+  "license": "",
+  "devDependencies": {
+    "clean-webpack-plugin": "^3.0.0",
+    "webpack": "^4.41.2",
+    "webpack-cli": "^3.3.10",
+    "webpack-dev-middleware": "^3.7.2"
+  },
+  "dependencies": {
+    "express": "^4.17.1"
+  },
+  "scripts": {
+    "build": "webpack",
+    "watch": "webpack --watch",
+    "start": "node server.js"
+  }
+}
