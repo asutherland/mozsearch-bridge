@@ -4,9 +4,11 @@
   module.exports = {
     mode: 'development',
     entry: {
-      app: './src/index-app.js',
+      // core infrastructure
       bridge: './src/index-bridge.js',
       inject: './src/index-inject.js',
+      // various app things
+      simple: './src/index-simple.js',
     },
     devtool: 'inline-source-map',
     plugins: [
