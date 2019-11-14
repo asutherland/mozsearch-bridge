@@ -71,8 +71,9 @@ function buildSimpleQuery(params) {
  */
 class BatchHandler {
   constructor() {
-    this.promise = new Promise((resolve) => {
+    this.promise = new Promise((resolve, reject) => {
       this._resolve = resolve;
+      this._reject = reject;
     });
 
     this.results = [];
@@ -84,6 +85,20 @@ class BatchHandler {
 
   onClose(id, hasNoMore, noResults) {
     this._resolve(this.results);
+  }
+
+  /**
+   * Invoked when a disconnection occurs.  This allows queries to be reissued
+   * when a reconnection occurs.  If we wanted that, we could have the handler
+   * latch the query creation values and have it reset its results herein and
+   * reissue the query with this self-same handler.
+   *
+   * However, everything is a big hack right now, and I'd rather avoid
+   * generating accidental load against the pernosco servers, so let's just
+   * reject in the case a disconnection occurs.
+   */
+  onDisconnected(id) {
+    this._reject('disconnected');
   }
 }
 
