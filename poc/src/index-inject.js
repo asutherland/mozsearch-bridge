@@ -54,6 +54,14 @@ function buildExecutionQuery({ symbol, print }, limit=50) {
   ];
 }
 
+function buildSimpleQuery(params) {
+  const queryFocus = Object.assign({}, window.client.focus);
+  return {
+    focus: queryFocus,
+    params
+  };
+}
+
 /**
  * Handler that just waits for all the results to come in, then resolves its
  * promise.
@@ -86,8 +94,26 @@ class POCServer extends BridgeServer {
     this.pclient = window.client;
   }
 
+  async onMsg_simpleQuery({ name, params }, reply) {
+    console.log('poc: processing simple query for', name);
+    let queryId;
+    try {
+      const req = buildSimpleQuery(params);
+      const handler = new BatchHandler();
+      queryId = this.pclient.openQuery(name, req, handler);
+      const results = await handler.promise;
+      queryId = null;
+
+      reply(results)
+    } finally {
+      if (queryId) {
+        this.pclient.cancelQuery(queryId);
+      }
+    }
+  }
+
   async onMsg_executionQuery({ symbol, print }, reply) {
-    console.log('poc: processing query for', symbol);
+    console.log('poc: processing execution query for', symbol);
     let beforeQueryId, afterQueryId;
     try {
       const [beforeReq, afterReq] = buildExecutionQuery({ symbol, print });
