@@ -22,7 +22,8 @@ potentially races shutdown.
     I see like a zillion "flush-cache-entry",
     "cycle-collector-forget-skippable", and "image-drawing" occurrences which
     then get capped by the more/more manual virtual list doodads.
-
+    - I have tricelog UI code for this already from grokysis to consume gdb
+      gaudy tricelog output.  Should probably just bridge grokysis next.
 
 #### Useful Context
 - Overall lifecycle of the process.

@@ -25,5 +25,83 @@ h1, h2, h3, h4, h5 {
 }
 
 #output-content {
-  white-space: pre;
+}
+
+.pd {
+  display: block;
+  border: 1px solid gray;
+  margin: 2px;
+  margin-left: 0.5em;
+  padding: 2px;
+}
+.pda-container {
+  display: inline-block;
+  border: 1px solid #888;
+  background-color: #eee;
+  margin: 0 4px;
+}
+.pda-focus {
+  margin: 0 4px;
+  font-style: italic;
+}
+.pda-kv-pair {
+  margin: 0 4px;
+}
+.pda-kv-key {
+
+}
+.pda-kv-equals {
+
+}
+.pda-kv-value {
+
+}
+
+.pd-tag {
+  font-size: 80%;
+  border: 1px solid #ccc;
+  margin-right: 2px;
+  vertical-align: top;
+  font-family: sans-serif;
+}
+
+.pd-str {
+  border: 1px dashed gray;
+}
+
+.pd0 {
+  background-color: #eff;
+}
+.pd1 {
+  background-color: #fef;
+}
+.pd2 {
+  background-color: #ffe;
+}
+.pd3 {
+  background-color: #eef;
+}
+.pd4 {
+  background-color: #efe;
+}
+.pd5 {
+  background-color: #fee;
+}
+.pd6 {
+  background-color: #dff;
+}
+.pd7 {
+  background-color: #fdf;
+}
+.pd8 {
+  background-color: #ffd;
+}
+.pd9 {
+  background-color: #ddf;
+}
+.pd10 {
+  background-color: #dfd;
+}
+.pd11 {
+  background-color: #fdd;
 }
