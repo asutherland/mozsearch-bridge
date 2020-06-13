@@ -79,14 +79,14 @@ function prettifyPmlInto(node, into, depth=0) {
   into.appendChild(elem);
 }
 
-function prettifyQueryResults(resultRows) {
+function prettifyQueryResults(rowHandler, resultRows) {
   const frag = new DocumentFragment();
 
   for (const row of resultRows) {
     if ('items' in row) {
       for (const item of row.items) {
         if (item.pml) {
-          prettifyPmlInto(item.pml, frag);
+          rowHandler(item.pml, frag);
         }
       }
     }
@@ -95,9 +95,42 @@ function prettifyQueryResults(resultRows) {
   return frag;
 }
 
+function automagicQueryResults(resultRows) {
+  const frag = new DocumentFragment();
+
+  return frag;
+}
+
+let gMostRecentResults = null;
+let gRenderMode = "auto-magic";
+
 function prettifyQueryResultsInto(resultRows, into) {
+  gMostRecentResults = { resultRows, into };
+  renderCurrentResults();
+}
+
+function renderCurrentResults() {
+  if (!gMostRecentResults) {
+    return;
+  }
+
+  let { resultRows, into } = gMostRecentResults;
   into.innerHTML = '';
-  const frag = prettifyQueryResults(resultRows);
+
+  let frag;
+  switch (gRenderMode) {
+    case "auto-magic": {
+      frag = automagicQueryResults(resultRows);
+      break;
+    }
+
+    default:
+    case "pretty-pml": {
+      frag = prettifyQueryResults(prettifyPmlInto, resultRows);
+      break;
+    }
+  }
+
   into.appendChild(frag);
 }
 
@@ -140,4 +173,18 @@ window.addEventListener('load', () => {
   document.getElementById('show-current-tasks').addEventListener('click', (evt) => {
     queryCurrentTasks();
   });
+
+  document.getElementById('output-show-as-container').addEventListener('change', (evt) => {
+    evt.preventDefault();
+
+    gRenderMode = evt.target.value;
+    console.log(`Display mode is now: ${evt.target.value}`);
+    renderCurrentResults();
+  });
+
+  // Get the current "show-as" value, which may have been propagated from a
+  // reload carrying prior form data forward.
+  const showAsForm = document.forms['output-show-as-container'];
+  const showAsFormData = new FormData(showAsForm);
+  gRenderMode = showAsFormData.get('show-as');
 });

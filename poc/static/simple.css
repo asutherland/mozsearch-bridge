@@ -24,6 +24,13 @@ h1, h2, h3, h4, h5 {
   background-color: #ccc;
 }
 
+#output-header-header,
+#output-show-as-container,
+#output-show-as-pretty-pml-container,
+#output-show-as-auto-magic-container {
+  display: inline-block;
+}
+
 #output-content {
 }
 

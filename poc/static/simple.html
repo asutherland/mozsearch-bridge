@@ -17,7 +17,36 @@
     </div>
   </div>
   <div id="output-region" class="region">
-    <h3>Output</h3>
+    <div id="output-header-row">
+      <h3 id="output-header-header">Output</h3>
+      <div id="output-show-as-container">
+        <form id="output-show-as-form">
+          <div id="output-show-as-pretty-pml-container">
+            <input
+              id="output-show-as-pretty-pml"
+              type="radio"
+              name="show-as"
+              value="pretty-pml"
+              >
+            <label for="output-show-as-pretty-pml">
+              Pretty PML
+            </label>
+          </div>
+          <div id="output-show-as-auto-magic-container">
+            <input
+              id="output-show-as-auto-magic"
+              type="radio"
+              name="show-as"
+              value="auto-magic"
+              checked
+              >
+            <label for="output-show-as-auto-magic">
+              Automatic Magic
+            </label>
+          </div>
+        </form>
+      </div>
+    </div>
     <div id="output-content">
     </div>
   </div>
