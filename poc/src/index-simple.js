@@ -7,6 +7,30 @@ console.log('app js loaded');
 let gNextReqId = 1;
 let client = new BridgeClient();
 
+function prettifyData(data, depth=0) {
+  const dataElem = document.createElement('div');
+  dataElem.setAttribute('class', 'pda-data');
+
+  for (let [key, value] of Object.entries(data)) {
+    const keyElem = document.createElement('div');
+    keyElem.setAttribute('class', `pda-data-key pda-data-key-depth-${depth}`);
+    keyElem.textContent = key;
+    dataElem.appendChild(keyElem);
+
+    let valueElem;
+    if (typeof(value) === 'object') {
+      valueElem = prettifyData(value, depth + 1);
+    } else {
+      valueElem = document.createElement('div');
+      valueElem.textContent = JSON.stringify(value, null, 2);
+    }
+    valueElem.classList.add('pda-data-value');
+    dataElem.appendChild(valueElem);
+  }
+
+  return dataElem;
+}
+
 /**
  * Create a somewhat dense HTML representation of raw PML that elides `focus`
  * structure details but does indicate their presence.  The goal is to be more
@@ -41,6 +65,11 @@ function prettifyPmlInto(node, into, depth=0) {
         focusElem.setAttribute('class', 'pda-focus');
         focusElem.textContent = 'f';
         attrDictElem.appendChild(focusElem);
+        continue;
+      }
+
+      if (key === 'data') {
+        attrDictElem.appendChild(prettifyData(value));
         continue;
       }
 
@@ -95,8 +124,16 @@ function prettifyQueryResults(rowHandler, resultRows) {
   return frag;
 }
 
-function automagicQueryResults(resultRows) {
+function renderRawJSON(resultRows) {
+  const c = document.createElement('pre');
+  c.textContent = JSON.stringify(resultRows, null, 2);
+  return c;
+}
+
+function automagicQueryResults(resultRows, mode) {
   const frag = new DocumentFragment();
+
+
 
   return frag;
 }
@@ -104,8 +141,8 @@ function automagicQueryResults(resultRows) {
 let gMostRecentResults = null;
 let gRenderMode = "auto-magic";
 
-function prettifyQueryResultsInto(resultRows, into) {
-  gMostRecentResults = { resultRows, into };
+function prettifyQueryResultsInto(resultRows, into, mode) {
+  gMostRecentResults = { resultRows, into, mode };
   renderCurrentResults();
 }
 
@@ -114,19 +151,24 @@ function renderCurrentResults() {
     return;
   }
 
-  let { resultRows, into } = gMostRecentResults;
+  let { resultRows, into, mode } = gMostRecentResults;
   into.innerHTML = '';
 
   let frag;
   switch (gRenderMode) {
     case "auto-magic": {
-      frag = automagicQueryResults(resultRows);
+      frag = automagicQueryResults(resultRows, mode);
       break;
     }
 
     default:
     case "pretty-pml": {
       frag = prettifyQueryResults(prettifyPmlInto, resultRows);
+      break;
+    }
+
+    case "raw": {
+      frag = renderRawJSON(resultRows);
       break;
     }
   }
@@ -144,7 +186,7 @@ async function queryExecutions(symName) {
     { symbol: symName, print: undefined });
 
   if (eOutput.reqId === reqId) {
-    prettifyQueryResultsInto(results, eOutput);
+    prettifyQueryResultsInto(results, eOutput, 'executions');
   }
 }
 
@@ -158,7 +200,7 @@ async function queryCurrentTasks() {
     { name: 'current-tasks', params: {} });
 
   if (eOutput.reqId === reqId) {
-    prettifyQueryResultsInto(results, eOutput);
+    prettifyQueryResultsInto(results, eOutput, 'current-tasks');
   }
 }
 
@@ -174,7 +216,7 @@ window.addEventListener('load', () => {
     queryCurrentTasks();
   });
 
-  document.getElementById('output-show-as-container').addEventListener('change', (evt) => {
+  document.getElementById('output-show-as-form').addEventListener('change', (evt) => {
     evt.preventDefault();
 
     gRenderMode = evt.target.value;
@@ -184,7 +226,7 @@ window.addEventListener('load', () => {
 
   // Get the current "show-as" value, which may have been propagated from a
   // reload carrying prior form data forward.
-  const showAsForm = document.forms['output-show-as-container'];
+  const showAsForm = document.forms['output-show-as-form'];
   const showAsFormData = new FormData(showAsForm);
   gRenderMode = showAsFormData.get('show-as');
 });

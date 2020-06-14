@@ -27,7 +27,8 @@ h1, h2, h3, h4, h5 {
 #output-header-header,
 #output-show-as-container,
 #output-show-as-pretty-pml-container,
-#output-show-as-auto-magic-container {
+#output-show-as-auto-magic-container,
+#output-show-as-raw-container {
   display: inline-block;
 }
 
@@ -50,6 +51,40 @@ h1, h2, h3, h4, h5 {
 .pda-focus {
   margin: 0 4px;
   font-style: italic;
+}
+.pda-data {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  border-bottom: 1px solid white;
+}
+.pda-data-key {
+
+}
+.pda-data-key-depth-0 {
+  background-color: #eee;
+}
+.pda-data-key-depth-1 {
+  background-color: #ddd;
+}
+.pda-data-key-depth-2 {
+  background-color: #ccc;
+}
+.pda-data-key-depth-3 {
+  background-color: #bbb;
+}
+.pda-data-key-depth-4 {
+  background-color: #aaa;
+}
+.pda-data-key-depth-5 {
+  background-color: #999;
+}
+.pda-data-key-depth-6,
+.pda-data-key-depth-7,
+.pda-data-key-depth-8 {
+  background-color: #888;
+}
+.pda-data-value {
+  background-color: #fff;
 }
 .pda-kv-pair {
   margin: 0 4px;
