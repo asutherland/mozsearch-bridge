@@ -41,6 +41,11 @@ class GrokContext {
     return pml && pml.t === "inline";
   }
 
+  /**
+   * Checks if a given attribute exists and has the given value, keeping in mind
+   * that most (meta)data lives under the `data` attribute and other attributes
+   * are pretty much all just presentational in nature.
+   */
   hasAttr(pml, key, value) {
     if (!pml || !pml.a) {
       return false;
@@ -399,14 +404,14 @@ function grokObjectKeyAndValue(pml, ctx) {
 function grokValue(pml, ctx) {
   let data;
   if (pml.t === "number") {
-    return ctx.getSoleString(pml);
+    data = ctx.getSoleString(pml);
   }
 
   let producer;
   let renderer;
-  if (pml.a) {
-    producer = ctx.runGrokkerOnNode(grokProducer, pml.a.producer);
-    renderer = ctx.runGrokkerOnNode(grokRenderer, pml.a.renderer);
+  if (pml.a && pml.a.data) {
+    producer = ctx.runGrokkerOnNode(grokProducer, pml.a.data.producer);
+    renderer = ctx.runGrokkerOnNode(grokRenderer, pml.a.data.renderer);
   }
 
   return {
@@ -440,7 +445,7 @@ function grokFunctionArgName(pml, ctx) {
   if (ctx.isInline(pml) && ctx.hasPairDelim(pml, "@")) {
     return {
       ident: ctx.runGrokkerOnNode(grokIdent, pml.c[0]),
-      value: ctx.runGrokkerOnNode(grokValue, pml.c[1]),
+      value: ctx.runGrokkerOnNode(grokValue, pml.c[2]),
     };
   }
 
