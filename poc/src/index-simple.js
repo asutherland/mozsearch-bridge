@@ -2,6 +2,8 @@
 
 import { BridgeClient } from './bridge/client.js';
 
+import { grokPML } from './pmlgrok/grokker.js';
+
 console.log('app js loaded');
 
 let gNextReqId = 1;
@@ -10,6 +12,11 @@ let client = new BridgeClient();
 function prettifyData(data, depth=0) {
   const dataElem = document.createElement('div');
   dataElem.setAttribute('class', 'pda-data');
+
+  if (!data) {
+    dataElem.textContent = JSON.stringify(data);
+    return dataElem;
+  }
 
   for (let [key, value] of Object.entries(data)) {
     const keyElem = document.createElement('div');
@@ -108,6 +115,13 @@ function prettifyPmlInto(node, into, depth=0) {
   into.appendChild(elem);
 }
 
+
+function grokAndPrettifyInto(node, into) {
+  const result = grokPML(node, null);
+
+  into.appendChild(prettifyData(result));
+}
+
 function prettifyQueryResults(rowHandler, resultRows) {
   const frag = new DocumentFragment();
 
@@ -130,14 +144,6 @@ function renderRawJSON(resultRows) {
   return c;
 }
 
-function automagicQueryResults(resultRows, mode) {
-  const frag = new DocumentFragment();
-
-
-
-  return frag;
-}
-
 let gMostRecentResults = null;
 let gRenderMode = "auto-magic";
 
@@ -157,7 +163,7 @@ function renderCurrentResults() {
   let frag;
   switch (gRenderMode) {
     case "auto-magic": {
-      frag = automagicQueryResults(resultRows, mode);
+      frag = prettifyQueryResults(grokAndPrettifyInto, resultRows);
       break;
     }
 
