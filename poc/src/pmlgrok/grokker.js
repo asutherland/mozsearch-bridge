@@ -615,7 +615,7 @@ function grokFunctionArg(pml, ctx) {
 }
 
 function grokItemTypeFunction(pml, ctx) {
-  return ctx.parsify(
+  const result = ctx.parsify(
     pml,
     [
       {
@@ -630,6 +630,16 @@ function grokItemTypeFunction(pml, ctx) {
       },
       ")",
     ]);
+
+  const focusInfo = pml.a.focus;
+  result.meta = {
+    pid: focusInfo.frame.addressSpaceUid.task.tid,
+    tid: focusInfo.tuid.tid,
+    entryMoment: focusInfo.frame.entryMoment,
+    returnMoment: focusInfo.frame.returnMoment,
+  };
+
+  return result;
 }
 
 /**

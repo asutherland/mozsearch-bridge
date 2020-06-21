@@ -51,6 +51,11 @@ class TableMaker {
      * All the current non-leaf nodes.
      */
     this.curStack = [];
+    this.maxDepth = 0;
+    /**
+     * All the leaf nodes, retained for fixup purposes.
+     */
+    this.leafNodes = [];
 
     this.curRow = null;
     this.root = document.createElement('table');
@@ -93,6 +98,7 @@ class TableMaker {
       // own separate useCount here.
       useCount: 0
     });
+    this.maxDepth = Math.max(this.curStack.length, this.maxDepth);
   }
 
   popKey() {
@@ -107,11 +113,16 @@ class TableMaker {
     const valueElem = document.createElement('td');
     valueElem.textContent = JSON.stringify(value, null, 2);
     valueElem.classList.add('pda-data-value')
+    this.leafNodes.push({ depth: this.curStack.length, elem: valueElem });
     this._bumpRowUses();
     this._emitRow(valueElem);
   }
 
   finalize() {
+    for (const leaf of this.leafNodes) {
+      leaf.elem.colSpan = this.maxDepth - leaf.depth + 1;
+    }
+
     return this.root;
   }
 }
@@ -418,6 +429,17 @@ async function queryEvaluate() {
 
 let gLastFocus = null;
 
+function findClosestFocus(target, initialFocus=null) {
+  let focus = initialFocus;
+  for (let node = target; node; node = node.parentNode) {
+    if (node.usingFocus) {
+      focus = node.usingFocus;
+      break;
+    }
+  }
+  return focus;
+}
+
 window.addEventListener('load', () => {
   document.getElementById('show-symbol').addEventListener('click', (evt) => {
     const eSymName = document.getElementById('symbol-name');
@@ -441,6 +463,18 @@ window.addEventListener('load', () => {
   document.getElementById('output-content').addEventListener('click', (evt) => {
     console.log('Processing click of', evt.target);
 
+    // Handle focus clicks by logging them
+    if (evt.target.classList.contains('pda-focus')) {
+      evt.preventDefault();
+      evt.stopPropagation();
+
+      let focus = findClosestFocus(evt.target);
+      if (focus) {
+        console.log("Clicked on focus", focus);
+      }
+      return;
+    }
+
     // Handle deref requests
     if (evt.target.tagName === 'INPUT' &&
         evt.target.type === 'button' &&
@@ -450,13 +484,7 @@ window.addEventListener('load', () => {
 
       // In the event this is a deref of a deref, we want to keep using the same
       // focus we used last time.
-      let focus = gLastFocus;
-      for (let node = evt.target; node; node = node.parentNode) {
-        if (node.usingFocus) {
-          focus = node.usingFocus;
-          break;
-        }
-      }
+      let focus = findClosestFocus(evt.target, gLastFocus);
       let data = evt.target.derefData;
       let moment = evt.target.derefMoment;
       if (focus) {
@@ -464,6 +492,7 @@ window.addEventListener('load', () => {
         gLastFocus = focus;
         queryDeref(focus, data, moment);
       }
+      return;
     }
   });
 
