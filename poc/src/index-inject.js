@@ -1,8 +1,7 @@
 /**
  * This is the bit of JS that gets injected via a bookmarklet and creates an
  * iframe communication bridge.  The iframe is currently just a way to bounce
- * messages across to a BroadcastChannel in the iframe's origin.  I had hoped to
- *
+ * messages across to a BroadcastChannel in the iframe's origin.
  */
 
 import { BridgeServer } from './bridge/server.js';
@@ -11,6 +10,12 @@ import { BridgeServer } from './bridge/server.js';
 const PORT = 3333;
 const ORIGIN = `http://localhost:${PORT}`
 
+
+/**
+ * Build an "executions of" query centered around the UI's current position in
+ * the trace.  The query will be limited to `limit` results in events occurring
+ * before and after the current position.
+ */
 function buildExecutionQuery({ symbol, print }, limit=50) {
   const queryFocus = Object.assign({}, window.client.focus);
   const focusMoment = queryFocus.moment;
@@ -54,12 +59,15 @@ function buildExecutionQuery({ symbol, print }, limit=50) {
   ];
 }
 
-function buildSimpleQuery(params) {
+/**
+ * Build a query defaulting to being evaluated at the current position in the
+ * trace.
+ */
+function buildSimpleQuery(mixArgs) {
   const queryFocus = Object.assign({}, window.client.focus);
-  return {
+  return Object.assign({
     focus: queryFocus,
-    params
-  };
+  }, mixArgs);
 }
 
 /**
@@ -118,11 +126,11 @@ class POCServer extends BridgeServer {
     return this.pclient.openQuery(name, req, handler, { api: 1 });
   }
 
-  async onMsg_simpleQuery({ name, params }, reply) {
+  async onMsg_simpleQuery({ name, mixArgs }, reply) {
     console.log('poc: processing simple query for', name);
     let queryId;
     try {
-      const req = buildSimpleQuery(params);
+      const req = buildSimpleQuery(mixArgs);
       const handler = new BatchHandler();
       queryId = this.pclient.openQuery(name, req, handler);
       const results = await handler.promise;

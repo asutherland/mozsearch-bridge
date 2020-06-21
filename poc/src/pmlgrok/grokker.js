@@ -2,6 +2,19 @@
  * This file hosts an attempt to re-constitute semantic information from
  * pernosco's PML representation.  The term "grok" is used excessively for want
  * of a better name; it basically means understand/process.
+ *
+ * ## Various Notes:
+ *
+ * ### Attributes of Note (Under "a")
+ *
+ * - "extent":
+ *   - "e"/"s": Presumably start/end
+ *     - "data"
+ *     - "frame"
+ *     - "moment"
+ *     - "node"
+ *     - "tuid"
+ * - "derefable": documented, seems to just be a marker.
  **/
 
 
@@ -284,6 +297,7 @@ console.log("considering", typeof(node), node, "with", handler, "and next", next
  * - "dwarfVariable"
  * - "subrange"
  * - "memory"
+ * - "dereference"
  */
 function grokProducer(val, ctx) {
   let grokker, subval;
@@ -293,39 +307,12 @@ function grokProducer(val, ctx) {
     return ctx.runGrokkerOnNode(grokProducerSubrange, val.subrange);
   } else if (val.memory) {
     return ctx.runGrokkerOnNode(grokProducerMemory, val.memory);
+  } else if (val.dereference) {
+    return ctx.runGrokkerOnNode(grokProducerDereference, val.dereference);
   } else {
     console.warn("Unable to find appropriate producer grokker", val);
     return null;
   }
-}
-
-/**
- * The "subrange" producer consists of an object with 3 keys:
- * - "name": The field name
- * - "producer": The parent's producer, walking back towards the root from a
- *   leaf.  For a field this is the type that the field lives on.  For a
- *   type "Base" that is subclassed by "Subclass" and where "Base" had a field
- *   on it, the field's parent is "Base" and its parent is then "Subclass"
- *   (because we're moving back towards the root as we go).
- * - "subrange": An object containing { start, end } (although in the opposite
- *   order), which seems to be the [start, end] of the data in the parent type.
- */
-function grokProducerSubrange(val, ctx) {
-  // XXX stub
-  return 'subrange';
-}
-
-/**
- * The "memory" producer consists of an object with 3keys:
- * - "addressSpace": { execs, task: { serial, tid } }
- * - "padWithUnmapped": some kind of alignment and zero-filling?
- * - "ranges": an array of { start, end } where start/end appear to be
- *   absolute memory addresses.  (Compared with "subrange" values which always
- *   seem to be relative to the parent producer.)
- */
-function grokProducerMemory(val, ctx) {
-  // XXX stub
-  return 'memory';
 }
 
 /**
@@ -345,10 +332,53 @@ function grokProducerDwarfVariable(val, ctx) {
 }
 
 /**
- *
+ * The "subrange" producer consists of an object with 3 keys:
+ * - "name": The field name
+ * - "producer": The parent's producer, walking back towards the root from a
+ *   leaf.  For a field this is the type that the field lives on.  For a
+ *   type "Base" that is subclassed by "Subclass" and where "Base" had a field
+ *   on it, the field's parent is "Base" and its parent is then "Subclass"
+ *   (because we're moving back towards the root as we go).
+ * - "subrange": An object containing { start, end } (although in the opposite
+ *   order), which seems to be the [start, end] of the data in the parent type.
+ */
+function grokProducerSubrange(val, ctx) {
+  // XXX stub
+  return 'subrange';
+}
+
+/**
+ * The "memory" producer consists of an object with 3 keys:
+ * - "addressSpace": { execs, task: { serial, tid } }
+ * - "padWithUnmapped": some kind of alignment and zero-filling?
+ * - "ranges": an array of { start, end } where start/end appear to be
+ *   absolute memory addresses.  (Compared with "subrange" values which always
+ *   seem to be relative to the parent producer.)
+ */
+function grokProducerMemory(val, ctx) {
+  // XXX stub
+  return 'memory';
+}
+
+/**
+ * Corresponds to a pointer having been traversed/dereferenced.  Keys:
+ * - "bytes":
+ * - "derefs": Seems to be the number of pointers traversed to get to memory to
+ *   pretty print it.
+ * - "offset":
+ * - "producer": The parent's producer.
+ */
+function grokProducerDereference(val, ctx) {
+}
+
+/**
+ * TODO: Does this want to somehow have its result used when interpreting the
+ * actual value?
  */
 function grokRenderer(val, ctx) {
-  if (val.dwarfType) {
+  if (val === "utf8") {
+    return 'utf8';
+  } else if (val.dwarfType) {
     return grokRendererDwarfType(val.dwarfType, ctx);
   } else if (val.pointer) {
     return grokRendererPointer(val.pointer, ctx);
@@ -361,6 +391,9 @@ function grokRenderer(val, ctx) {
 /**
  * Keys:
  * - "deref": { level: number }
+ *   - Mainly seeing level of 0 and 1, with this seeming to correspond to the
+ *     number of pointers that were dereferenced (based on the existence and
+ *     implied semantics of the "dereference" producer).
  * - "type_": { baseAddress, binary, type: { f: "m", o: number }, unit }
  */
 function grokRendererDwarfType(val, ctx) {
@@ -404,7 +437,15 @@ function grokObjectKeyAndValue(pml, ctx) {
 function grokValue(pml, ctx) {
   let data;
   if (pml.t === "number") {
+    // Numbers should be included directly
     data = ctx.getSoleString(pml);
+  } else if (pml.t === "inline") {
+    // String values seem to end up as a t=inline with 3 children: [`"`,
+    // t=str c=["ACTUAL STRING"], `"`].
+    if (ctx.hasWrappingDelims(pml, '"', '"') && pml.c[1].t === "str") {
+      // There should probably only be a sole string, but handle weirdness.
+      data = ctx.getFlattenedString(pml.c[1]);
+    }
   }
 
   let producer;

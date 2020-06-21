@@ -52,12 +52,15 @@ h1, h2, h3, h4, h5 {
   margin: 0 4px;
   font-style: italic;
 }
-.pda-data {
+.pda-nightmare-data {
   display: grid;
   grid-template-columns: 120px 1fr;
   border-bottom: 1px solid white;
 }
+.pda-data {
+}
 .pda-data-key {
+
 
 }
 .pda-data-key-depth-0 {
