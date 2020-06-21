@@ -6,8 +6,7 @@
     entry: {
       // ## core infrastructure
       bridge: './src/index-bridge.js',
-      // note that "inject" lives under the webpack-inject.config.js
-      // because it can't have devtools source map stuff mixed in.
+      inject: './src/index-inject.js',
 
       // ## bookmarklet making support
       bookmarklet: './src/bookmarklet-maker.js',
