@@ -4,9 +4,13 @@
   module.exports = {
     mode: 'development',
     entry: {
-      // core infrastructure
+      // ## core infrastructure
       bridge: './src/index-bridge.js',
-      inject: './src/index-inject.js',
+      // note that "inject" lives under the webpack-inject.config.js
+      // because it can't have devtools source map stuff mixed in.
+
+      // ## bookmarklet making support
+      bookmarklet: './src/bookmarklet-maker.js',
       // various app things
       simple: './src/index-simple.js',
     },
