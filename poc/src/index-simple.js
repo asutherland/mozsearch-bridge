@@ -129,7 +129,10 @@ function prettifyData(dataRoot) {
       return;
     }
 
+    let keyCount = 0;
     for (let [key, value] of Object.entries(data)) {
+      keyCount++;
+
       tableMaker.pushKey(key);
 
       if (typeof(value) === 'object') {
@@ -139,6 +142,12 @@ function prettifyData(dataRoot) {
       }
 
       tableMaker.popKey();
+    }
+
+    // This could have been an empty object, in which case we want to emit an
+    // empty object.
+    if (keyCount === 0) {
+      tableMaker.emitLeaf(data);
     }
   }
   traverse(dataRoot);
@@ -241,8 +250,8 @@ function prettifyPmlInto(node, into, depth=0) {
 }
 
 
-function grokAndPrettifyInto(node, into, depth=0) {
-  const result = grokPML(node, null);
+function grokAndPrettifyInto(node, into, depth=0, mode) {
+  const result = grokPML(node, mode);
 
   into.appendChild(prettifyData(result));
 }
@@ -255,7 +264,7 @@ function prettifyQueryResults(rowHandler, resultRows, mode) {
     // because they're a fixup to an existing PML tree.
     for (const row of resultRows) {
       if ('value' in row) {
-        rowHandler(row.value, frag, 0);
+        rowHandler(row.value, frag, 0, mode);
       }
     }
   } else {
@@ -263,7 +272,7 @@ function prettifyQueryResults(rowHandler, resultRows, mode) {
       if ('items' in row) {
         for (const item of row.items) {
           if (item.pml) {
-            rowHandler(item.pml, frag, 0);
+            rowHandler(item.pml, frag, 0, mode);
           }
         }
       }
@@ -353,7 +362,6 @@ async function queryCurrentTasks() {
 // XXX deref was for a time distinct from "evaluate", but this should now be
 // merged a little.
 async function queryDeref(focus, data, moment) {
-  gRenderMode = 'raw';
   const eOutput = document.getElementById('output-content');
   // This is our brand for ensuring we still should be the one outputting there.
   const reqId = eOutput.reqId = gNextReqId++;
@@ -408,6 +416,8 @@ async function queryEvaluate() {
   }
 }
 
+let gLastFocus = null;
+
 window.addEventListener('load', () => {
   document.getElementById('show-symbol').addEventListener('click', (evt) => {
     const eSymName = document.getElementById('symbol-name');
@@ -438,7 +448,9 @@ window.addEventListener('load', () => {
       evt.preventDefault();
       evt.stopPropagation();
 
-      let focus = null;
+      // In the event this is a deref of a deref, we want to keep using the same
+      // focus we used last time.
+      let focus = gLastFocus;
       for (let node = evt.target; node; node = node.parentNode) {
         if (node.usingFocus) {
           focus = node.usingFocus;
@@ -448,6 +460,8 @@ window.addEventListener('load', () => {
       let data = evt.target.derefData;
       let moment = evt.target.derefMoment;
       if (focus) {
+        // Save off this focus so if we deref a deref it still works.
+        gLastFocus = focus;
         queryDeref(focus, data, moment);
       }
     }

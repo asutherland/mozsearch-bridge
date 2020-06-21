@@ -412,6 +412,9 @@ function grokRendererPointer(val, ctx) {
 
 /**
  * Object representations look like ["{", [[name, "=", value], ",", ...], "}"].
+ *
+ * There also appear to be variations for classes where the superclasses get
+ * wrapped in extra layers of braces.
  */
 function grokObject(pml, ctx) {
   return ctx.unwrapAndParsify(
@@ -430,6 +433,14 @@ function grokObject(pml, ctx) {
 }
 
 function grokObjectKeyAndValue(pml, ctx) {
+  // TODO: This direct re-delegation maybe shouldn't be bypassing the ctx?
+
+  // It seems like objects can also have nested objects, presumably due to
+  // superclass fields.  So if that's the case, just call grokObject again.
+  if (ctx.hasWrappingDelims(pml, "{", "}")) {
+    return grokObject(pml, ctx);
+  }
+
   // TODO: maybe this wants more special handling than the function logic
   return grokFunctionArg(pml, ctx);
 }
@@ -446,6 +457,8 @@ function grokValue(pml, ctx) {
       // There should probably only be a sole string, but handle weirdness.
       data = ctx.getFlattenedString(pml.c[1]);
     }
+  } else if (pml.t === "ident") {
+    data = ctx.getFlattenedString(pml);
   }
 
   let producer;
@@ -457,8 +470,8 @@ function grokValue(pml, ctx) {
 
   return {
     data,
-    producer,
-    renderer,
+    //producer,
+    //renderer,
   };
 }
 
@@ -469,6 +482,44 @@ function grokIdent(pml, ctx) {
   return {
     name
   };
+}
+
+/**
+ * Compound identifiers end up as a left-recursive tree until we get an inline
+ * of the form [t=ident, ".", t=ident] where the attr on the containing parent
+ * is providing data about the right ident.  This info also provides information
+ * about the parent which is the left by way of the "subrange" identifying it.
+ *
+ * For now we flatten everything to a single string, joining all names.
+ */
+function grokCompoundIdent(pml, ctx) {
+  // Handle this actually being a simple ident.  We're t=inline if complex.
+  if (ctx.isIdent(pml)) {
+    return ctx.runGrokkerOnNode(grokIdent, pml);
+  }
+
+  function processIdent(piecePml) {
+    if (ctx.isIdent(piecePml)) {
+      return ctx.runGrokkerOnNode(grokIdent, piecePml);
+    } else {
+      return ctx.runGrokkerOnNode(grokCompoundIdent, piecePml);
+    }
+  }
+
+  if (ctx.hasPairDelim(pml, ".")) {
+    let left = processIdent(pml.c[0]);
+    let right = processIdent(pml.c[2]);
+
+    const name = left.name + "." + right.name;
+
+    // There's other information in here, but it's not particularly useful yet.
+    return {
+      name
+    };
+  }
+
+  console.warn("Unknown compound ident format", pml);
+  return null;
 }
 
 /**
@@ -483,9 +534,18 @@ function grokFunctionArgName(pml, ctx) {
     };
   }
 
+  // ## "." delimited indicating a compound ident
+  if (ctx.isInline(pml) && ctx.hasPairDelim(pml, ".")) {
+    return {
+      ident: ctx.runGrokkerOnNode(grokCompoundIdent, pml),
+      value: undefined,
+    };
+  }
+
   if (ctx.isInline(pml) && ctx.hasPairDelim(pml, "@")) {
     return {
-      ident: ctx.runGrokkerOnNode(grokIdent, pml.c[0]),
+      // This could be a simple ident or ?maybe? a compound ident
+      ident: ctx.runGrokkerOnNode(grokCompoundIdent, pml.c[0]),
       value: ctx.runGrokkerOnNode(grokValue, pml.c[2]),
     };
   }
@@ -579,6 +639,14 @@ function grokItemTypeFunction(pml, ctx) {
  * TODO: Things will get more complicated when print expressions get involved.
  */
 function grokRootPML(pml, mode, results) {
+  if (mode === "evaluate") {
+    let result;
+    const ctx = new GrokContext();
+    result = ctx.runGrokkerOnNode(grokFunctionArg, pml);
+    results.push(result);
+    return
+  }
+
   if (pml.t !== "block") {
     console.warn("Unexpected root PML type", pml.t, pml);
     return;
@@ -611,7 +679,7 @@ function grokRootPML(pml, mode, results) {
   const ctx = new GrokContext();
   switch (canonChild.a.itemTypeName) {
     case "function": {
-      result = ctx.runGrokkerOnNode(grokItemTypeFunction, canonChild, ctx);
+      result = ctx.runGrokkerOnNode(grokItemTypeFunction, canonChild);
       break;
     }
   }
