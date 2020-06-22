@@ -42,8 +42,7 @@
  */
 class GrokContext {
   constructor() {
-    // Nothing to do as of yet.
-    this.verbose = true;
+    this.verbose = false;
   }
 
   isIdent(pml) {
@@ -180,14 +179,18 @@ class GrokContext {
       handlerProcessed = 0;
       expectingHandlerDelim = false;
     };
-console.log("parsifying node", pml);
+    if (this.verbose) {
+      console.log("parsifying node", pml);
+    }
     for (let node of pml.c) {
       let handler = allHandlers[iHandler];
       let nextHandler;
       if (iHandler + 1 < allHandlers.length) {
         nextHandler = allHandlers[iHandler + 1];
       }
-console.log("considering", typeof(node), node, "with", handler, "and next", nextHandler);
+      if (this.verbose) {
+        console.log("considering", typeof(node), node, "with", handler, "and next", nextHandler);
+      }
       // ## Is this PML node a string?
       if (typeof(node) === "string") {
         // normalize off any whitespace.
@@ -230,7 +233,7 @@ console.log("considering", typeof(node), node, "with", handler, "and next", next
 
         console.warn(
           `Found unexpected delimiter ${node} for`, iHandler, 'in',
-          allHandlers, `(was expecting?: ${expectingHandlerDelim})`);
+          allHandlers, `(was expecting?: ${expectingHandlerDelim})`, pml);
         break;
       }
 
@@ -298,6 +301,8 @@ console.log("considering", typeof(node), node, "with", handler, "and next", next
  * - "subrange"
  * - "memory"
  * - "dereference"
+ * - "returnValue"
+ * - "literal": Corresponds to things like $pid and $tid
  */
 function grokProducer(val, ctx) {
   let grokker, subval;
@@ -309,6 +314,10 @@ function grokProducer(val, ctx) {
     return ctx.runGrokkerOnNode(grokProducerMemory, val.memory);
   } else if (val.dereference) {
     return ctx.runGrokkerOnNode(grokProducerDereference, val.dereference);
+  } else if (val.returnValue) {
+    return ctx.runGrokkerOnNode(grokProducerReturnValue, val.returnValue);
+  } else if (val.literal) {
+    return ctx.runGrokkerOnNode(grokProducerLiteral, val.literal);
   } else {
     console.warn("Unable to find appropriate producer grokker", val);
     return null;
@@ -369,15 +378,38 @@ function grokProducerMemory(val, ctx) {
  * - "producer": The parent's producer.
  */
 function grokProducerDereference(val, ctx) {
+  return 'dereference';
+}
+
+function grokProducerReturnValue(val, ctx) {
+  return 'returnValue';
+}
+
+/**
+ * Keys:
+ * - "addressSpaceUid": { execs, task: { serial, tid } }
+ * - "bytes": This seems to be an array of uint8's.  For the value 12717 the
+ *   array has 0th entry 173 (12717 & 0xff) and 1st entry 49 (12717 >> 8).
+ */
+function grokProducerLiteral(val, ctx) {
+  return 'literal';
 }
 
 /**
  * TODO: Does this want to somehow have its result used when interpreting the
  * actual value?
+ *
+ * Known types:
+ * - "utf8" literal
+ * - "bigInt" literal
+ * - "dwarfType"
+ * - "pointer"
  */
 function grokRenderer(val, ctx) {
   if (val === "utf8") {
     return 'utf8';
+  } else if (val === "bigInt") {
+    return 'bigInt';
   } else if (val.dwarfType) {
     return grokRendererDwarfType(val.dwarfType, ctx);
   } else if (val.pointer) {
@@ -473,6 +505,13 @@ function grokValue(pml, ctx) {
     //producer,
     //renderer,
   };
+}
+
+/**
+ * Process the results of an "executions of" "print" arg results.
+ */
+function grokPrinted(pml, ctx) {
+  return grokValue(pml, ctx);
 }
 
 function grokIdent(pml, ctx) {
@@ -629,6 +668,11 @@ function grokItemTypeFunction(pml, ctx) {
         repeatDelim: ",",
       },
       ")",
+      "=",
+      {
+        name: "rval",
+        grokker: grokValue
+      }
     ]);
 
   const focusInfo = pml.a.focus;
@@ -642,6 +686,8 @@ function grokItemTypeFunction(pml, ctx) {
   return result;
 }
 
+const PRINT_DELIM_ARROW = "→";
+
 /**
  * Process root PML nodes which we expect to be blocks that hold an inline
  * result whose attributes describes what we're seeing.
@@ -649,9 +695,10 @@ function grokItemTypeFunction(pml, ctx) {
  * TODO: Things will get more complicated when print expressions get involved.
  */
 function grokRootPML(pml, mode, results) {
+  const ctx = new GrokContext();
+
   if (mode === "evaluate") {
     let result;
-    const ctx = new GrokContext();
     result = ctx.runGrokkerOnNode(grokFunctionArg, pml);
     results.push(result);
     return
@@ -670,7 +717,27 @@ function grokRootPML(pml, mode, results) {
     return;
   }
 
-  const canonChild = pml.c[0];
+  // At this point, we expect to either have a single child with an
+  // "itemTypeName" attribute OR we expect for it to be wrapped in an inline
+  // that has "→" as a delimiter separating print values from that child.
+  let topPml = pml.c[0];
+  let canonChild = topPml;
+  let printWrapped = false;
+
+  if (!canonChild.a &&
+      canonChild.c && canonChild.c.length && canonChild.c[0].a &&
+      canonChild.c[0].a.itemTypeName) {
+    if (canonChild.c[1].trim() !== PRINT_DELIM_ARROW) {
+      console.warn("Result is not print-wrapped but should be?", pml);
+      return;
+    }
+
+    // For assertion purposes, we want to use this as our new canonChild, but
+    // we want to leave topPml the same as that's the basis of our printWrapped
+    // processing.
+    canonChild = canonChild.c[0];
+    printWrapped = true;
+  }
 
   if (canonChild.t !== "inline") {
     console.warn("Canonical child is not inline", canonChild.t, canonChild);
@@ -685,13 +752,37 @@ function grokRootPML(pml, mode, results) {
     return;
   }
 
-  let result;
-  const ctx = new GrokContext();
+  let canonGrokker;
   switch (canonChild.a.itemTypeName) {
     case "function": {
-      result = ctx.runGrokkerOnNode(grokItemTypeFunction, canonChild);
+      canonGrokker = grokItemTypeFunction;
       break;
     }
+
+    default: {
+      console.warn("No grokker for", canonChild.a.itemTypeName);
+      return;
+    }
+  }
+  
+  let result;
+  if (printWrapped) {
+    result = ctx.parsify(
+      topPml,
+      [
+        {
+          name: "queried",
+          grokker: canonGrokker,
+        },
+        PRINT_DELIM_ARROW,
+        {
+          name: "printed",
+          grokker: grokPrinted,
+          repeatDelim: ",",
+        },
+      ]);
+  } else {
+    result = ctx.runGrokkerOnNode(grokItemTypeFunction, canonChild);
   }
 
   results.push(result);
@@ -718,5 +809,4 @@ export function grokPMLRows(rows, mode) {
 }
 
 export function renderGrokkedInto(grokked, elem) {
-
 }

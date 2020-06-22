@@ -260,7 +260,6 @@ function prettifyPmlInto(node, into, depth=0) {
   into.appendChild(elem);
 }
 
-
 function grokAndPrettifyInto(node, into, depth=0, mode) {
   const result = grokPML(node, mode);
 
@@ -337,17 +336,19 @@ function renderCurrentResults() {
   into.appendChild(frag);
 }
 
-async function queryExecutions(symName) {
+async function queryExecutions(symName, print) {
   const eOutput = document.getElementById('output-content');
   // This is our brand for ensuring we still should be the one outputting there.
   const reqId = eOutput.reqId = gNextReqId++;
 
   const results = await client.sendMessageAwaitingReply(
     'executionQuery',
-    { symbol: symName, print: undefined });
+    { symbol: symName, print });
+
+  let mode = print ? 'executions-with-print' : 'executions';
 
   if (eOutput.reqId === reqId) {
-    prettifyQueryResultsInto(results, eOutput, 'executions');
+    prettifyQueryResultsInto(results, eOutput, mode);
   }
 }
 
@@ -445,7 +446,10 @@ window.addEventListener('load', () => {
     const eSymName = document.getElementById('symbol-name');
     const symName = eSymName.value;
 
-    queryExecutions(symName);
+    const eSymPrint = document.getElementById('symbol-print');
+    const symPrint = eSymPrint.value || undefined;
+
+    queryExecutions(symName, symPrint);
   });
 
   document.getElementById('show-current-tasks').addEventListener('click', (evt) => {
