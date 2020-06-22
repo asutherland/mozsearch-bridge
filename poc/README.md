@@ -2,7 +2,7 @@ Steps:
 
 0. Read the CSP section below.
 1. npm install
-2. npm start
+2. npm run start
 3. copy and paste the bookmarklet that the server spits out and run it in a pernosco window
   - The bookmark toolbar is great for this.
     - Right click on the bookmark toolbar and choose "New Bookmark..."
