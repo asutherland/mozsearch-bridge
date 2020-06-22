@@ -311,58 +311,64 @@ function shortSymbolName(name) {
  */
 let gTimelineData;
 let gTimelineGroups;
+let gLastIngestedRows;
 let gTimeline;
 let gTimelineDataGen = 0;
 
 const EVENT_SCALE = 100;
 
 function renderTimeline(rows, container) {
-  const results = grokPMLRows(rows);
+  // Only process this data if we haven't already processed it.  (We don't want
+  // switching between rendering modes to keep adding duplicate data.)
+  if (gLastIngestedRows !== rows) {
+    gLastIngestedRows = rows;
 
-  if (!gTimelineData) {
-    gTimelineGroups = new DataSet();
-    gTimelineData = new DataSet();
-  }
-
-  const groups = gTimelineGroups;
-  const data = gTimelineData;
-
-  for (const call of results) {
-    const { pid, tid } = call.meta;
-    let pidGroup = groups.get(pid);
-    if (!pidGroup) {
-      pidGroup = {
-        id: pid,
-        content: `${pid}`,
-        nestedGroups: [],
-      };
-      groups.add(pidGroup);
+    if (!gTimelineData) {
+      gTimelineGroups = new DataSet();
+      gTimelineData = new DataSet();
     }
 
-    // if the tid is also the pid, just leave it.
-    if (pid !== tid) {
-      let tidGroup = groups.get(tid);
-      if (!tidGroup) {
-        tidGroup = {
-          id: tid,
-          content: `${tid}`
+    const groups = gTimelineGroups;
+    const data = gTimelineData;
+
+    const results = grokPMLRows(rows);
+    for (const call of results) {
+      const { pid, tid } = call.meta;
+      let pidGroup = groups.get(pid);
+      if (!pidGroup) {
+        pidGroup = {
+          id: pid,
+          content: `${pid}`,
+          nestedGroups: [],
         };
-        groups.add(tidGroup);
+        groups.add(pidGroup);
       }
-      if (!pidGroup.nestedGroups.includes(tid)) {
-        pidGroup.nestedGroups.push(tid);
-      }
-    }
 
-    let dataId = gTimelineDataGen++;
-    data.add({
-      id: dataId,
-      group: tid,
-      content: shortSymbolName(call.func.name),
-      type: call.meta.returnMoment ? 'range' : 'box',
-      start: call.meta.entryMoment.event,
-      end: call.meta.returnMoment ? call.meta.returnMoment.event : null,
-    });
+      // if the tid is also the pid, just leave it.
+      if (pid !== tid) {
+        let tidGroup = groups.get(tid);
+        if (!tidGroup) {
+          tidGroup = {
+            id: tid,
+            content: `${tid}`
+          };
+          groups.add(tidGroup);
+        }
+        if (!pidGroup.nestedGroups.includes(tid)) {
+          pidGroup.nestedGroups.push(tid);
+        }
+      }
+
+      let dataId = gTimelineDataGen++;
+      data.add({
+        id: dataId,
+        group: tid,
+        content: shortSymbolName(call.func.name),
+        type: call.meta.returnMoment ? 'range' : 'box',
+        start: call.meta.entryMoment.event,
+        end: call.meta.returnMoment ? call.meta.returnMoment.event : null,
+      });
+    }
   }
 
   const options = {

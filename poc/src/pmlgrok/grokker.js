@@ -53,6 +53,13 @@ class GrokContext {
     return pml && pml.t === "inline";
   }
 
+  isSoleString(pml) {
+    if (!pml || !pml.c) {
+      return false;
+    }
+    return (pml.c.length === 1 && typeof(pml.c[0]) === "string");
+  }
+
   isArraySubscripting(pml) {
     return pml.c.length === 2 && typeof(pml.c[1]) === "string" &&
       /\[\d+\]/.test(pml.c[1]);
@@ -583,6 +590,18 @@ function grokFunctionArgName(pml, ctx) {
   if (ctx.isIdent(pml)) {
     return {
       ident: ctx.runGrokkerOnNode(grokIdent, pml),
+      value: undefined,
+    };
+  }
+
+  // ## Simple case: single-string inline, ex for "<anon>"
+  if (ctx.isInline(pml) && ctx.isSoleString(pml)) {
+    return {
+      ident: {
+        // XXX since this is probably "<anon>" should this just be an undefined
+        // name?
+        name: ctx.getSoleString(pml),
+      },
       value: undefined,
     };
   }
