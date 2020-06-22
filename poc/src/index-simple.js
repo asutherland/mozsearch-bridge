@@ -394,6 +394,7 @@ function renderTimeline(rows, container) {
 
 let gMostRecentResults = null;
 let gRenderMode = "auto-magic";
+let gLastRender = "";
 
 function prettifyQueryResultsInto(resultRows, into, mode) {
   gMostRecentResults = window.RESULTS = { resultRows, into, mode };
@@ -406,10 +407,15 @@ function renderCurrentResults() {
   }
 
   let { resultRows, into, mode } = gMostRecentResults;
-  into.innerHTML = '';
+
   if (gTimeline && gRenderMode !== "timeline") {
     gTimeline.destroy();
     gTimeline = null;
+  }
+  // We like to redraw from scratch unless we were already displaying the
+  // timeline and are going to continue to be displaying the timeline.
+  if (gLastRender !== "timeline" || gRenderMode !== "timeline") {
+    into.innerHTML = '';
   }
 
   let frag;
@@ -438,6 +444,7 @@ function renderCurrentResults() {
   if (frag) {
     into.appendChild(frag);
   }
+  gLastRender = gRenderMode;
 }
 
 async function queryExecutions(symName, print) {

@@ -4,11 +4,21 @@ Steps:
 1. npm install
 2. npm start
 3. copy and paste the bookmarklet that the server spits out and run it in a pernosco window
+  - The bookmark toolbar is great for this.
+    - Right click on the bookmark toolbar and choose "New Bookmark..."
+    - Name the bookmark and paste the script into "Location".
+  - There's also a mechanism that fully inlines the injected script, but this is
+    not really a win, although it's easier to add the bookmark.
 4. browse to http://localhost:3333/simple.html
 5. Do one of:
   - type a fully qualified symbol into the text field and click "Show Symbol Executions"
+    - the easiest way to get a fully qualified symbol is to use the pernosco
+      search box and select the "executions of" directly there.
   - click "Show Current Tasks"
-6. see result stuff
+6. see result stuff.  Click different radio buttons to see the results in
+   different ways.
+  - Note that the timeline accumulates results across all searches run.  Refresh
+    the page to reset.
 
 ### CSP
 
