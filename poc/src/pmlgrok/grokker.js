@@ -53,6 +53,11 @@ class GrokContext {
     return pml && pml.t === "inline";
   }
 
+  isArraySubscripting(pml) {
+    return pml.c.length === 2 && typeof(pml.c[1]) === "string" &&
+      /\[\d+\]/.test(pml.c[1]);
+  }
+
   /**
    * Checks if a given attribute exists and has the given value, keeping in mind
    * that most (meta)data lives under the `data` attribute and other attributes
@@ -231,7 +236,7 @@ class GrokContext {
           }
         }
 
-        console.warn(
+        console.error(
           `Found unexpected delimiter ${node} for`, iHandler, 'in',
           allHandlers, `(was expecting?: ${expectingHandlerDelim})`, pml);
         break;
@@ -291,7 +296,15 @@ class GrokContext {
       return null;
     }
 
-    return this.parsify(pml.c[1], allHandlers);
+    const kid = pml.c[1];
+
+    // There are situations related to objects where we keep running into
+    // wrappers, so just keep unwrapping until we run out of the wrapper.
+    if (this.hasWrappingDelims(kid, wrapper.opens, wrapper.closes)) {
+      return this.unwrapAndParsify(kid, wrapper, allHandlers);
+    } else {
+      return this.parsify(kid, allHandlers);
+    }
   }
 }
 
@@ -562,7 +575,8 @@ function grokCompoundIdent(pml, ctx) {
 }
 
 /**
- * This is either a t=ident or a t=inline with [t=ident, "@", t=number].
+ * This is either a t=ident, a t=inline with [t=ident, "@", t=number], or a
+ * further t=inline variant array variant [[t=ident, "@", t=number], "[0]"]
  */
 function grokFunctionArgName(pml, ctx) {
   // ## Simple Case: Just an ident
@@ -586,6 +600,18 @@ function grokFunctionArgName(pml, ctx) {
       // This could be a simple ident or ?maybe? a compound ident
       ident: ctx.runGrokkerOnNode(grokCompoundIdent, pml.c[0]),
       value: ctx.runGrokkerOnNode(grokValue, pml.c[2]),
+    };
+  }
+
+  // This is the array-subscripted situation.
+  if (ctx.isArraySubscripting(pml) && ctx.hasPairDelim(pml.c[0], "@")) {
+    const wrapped = pml.c[0];
+    let ident = ctx.runGrokkerOnNode(grokCompoundIdent, wrapped.c[0]);
+    ident.subscript = pml.c[1];
+    return {
+      // This could be a simple ident or ?maybe? a compound ident
+      ident,
+      value: ctx.runGrokkerOnNode(grokValue, wrapped.c[2]),
     };
   }
 
