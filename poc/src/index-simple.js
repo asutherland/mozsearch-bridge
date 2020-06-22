@@ -1,6 +1,9 @@
 import { BridgeClient } from './bridge/client.js';
 
-import { grokPML } from './pmlgrok/grokker.js';
+import { Timeline } from "vis-timeline/peer";
+import { DataSet } from "vis-data/peer";
+
+import { grokPML, grokPMLRows } from './pmlgrok/grokker.js';
 
 console.log('app js loaded');
 
@@ -298,6 +301,91 @@ function renderRawJSON(resultRows) {
   return c;
 }
 
+function shortSymbolName(name) {
+  const parts = name.split('::');
+  return parts.slice(-2).join('::');
+}
+
+/**
+ * The timeline data currently accumulates.
+ */
+let gTimelineData;
+let gTimelineGroups;
+let gTimeline;
+let gTimelineDataGen = 0;
+
+const EVENT_SCALE = 100;
+
+function renderTimeline(rows, container) {
+  const results = grokPMLRows(rows);
+
+  if (!gTimelineData) {
+    gTimelineGroups = new DataSet();
+    gTimelineData = new DataSet();
+  }
+
+  const groups = gTimelineGroups;
+  const data = gTimelineData;
+
+  for (const call of results) {
+    const { pid, tid } = call.meta;
+    let pidGroup = groups.get(pid);
+    if (!pidGroup) {
+      pidGroup = {
+        id: pid,
+        content: `${pid}`,
+        nestedGroups: [],
+      };
+      groups.add(pidGroup);
+    }
+
+    // if the tid is also the pid, just leave it.
+    if (pid !== tid) {
+      let tidGroup = groups.get(tid);
+      if (!tidGroup) {
+        tidGroup = {
+          id: tid,
+          content: `${tid}`
+        };
+        groups.add(tidGroup);
+      }
+      if (!pidGroup.nestedGroups.includes(tid)) {
+        pidGroup.nestedGroups.push(tid);
+      }
+    }
+
+    let dataId = gTimelineDataGen++;
+    data.add({
+      id: dataId,
+      group: tid,
+      content: shortSymbolName(call.func.name),
+      type: call.meta.returnMoment ? 'range' : 'box',
+      start: call.meta.entryMoment.event,
+      end: call.meta.returnMoment ? call.meta.returnMoment.event : null,
+    });
+  }
+
+  const options = {
+    groupOrder: 'id',
+    zoomMin: 10,
+    zoomMax: 1 * 1000 * 1000,
+    format: {
+      minorLabels: function(date/*, scale/*, step*/) {
+        const relTicks = Math.floor(date * EVENT_SCALE / 1000000);
+        return `${relTicks} MTicks`;
+      },
+      majorLabels: function(date/*, scale/*, step*/) {
+        const relTicks = Math.floor(date * EVENT_SCALE / 1000000);
+        return `${relTicks} MTicks`;
+      }
+    }
+  };
+
+  if (!gTimeline) {
+    gTimeline = new Timeline(container, gTimelineData, gTimelineGroups, options);
+  }
+}
+
 let gMostRecentResults = null;
 let gRenderMode = "auto-magic";
 
@@ -313,6 +401,10 @@ function renderCurrentResults() {
 
   let { resultRows, into, mode } = gMostRecentResults;
   into.innerHTML = '';
+  if (gTimeline && gRenderMode !== "timeline") {
+    gTimeline.destroy();
+    gTimeline = null;
+  }
 
   let frag;
   switch (gRenderMode) {
@@ -331,9 +423,15 @@ function renderCurrentResults() {
       frag = renderRawJSON(resultRows, mode);
       break;
     }
+
+    case "timeline": {
+      renderTimeline(resultRows, into);
+    }
   }
 
-  into.appendChild(frag);
+  if (frag) {
+    into.appendChild(frag);
+  }
 }
 
 async function queryExecutions(symName, print) {

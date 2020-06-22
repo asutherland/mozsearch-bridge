@@ -764,7 +764,7 @@ function grokRootPML(pml, mode, results) {
       return;
     }
   }
-  
+
   let result;
   if (printWrapped) {
     result = ctx.parsify(
@@ -797,7 +797,7 @@ export function grokPML(pml, mode) {
 export function grokPMLRows(rows, mode) {
   const results = [];
   for (const row of rows) {
-    if (pml.items) {
+    if (row.items) {
       for (const item of row.items) {
         if (item.pml) {
           grokRootPML(item.pml, mode, results);

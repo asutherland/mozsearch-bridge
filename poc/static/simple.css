@@ -28,6 +28,7 @@ h1, h2, h3, h4, h5 {
 #output-show-as-container,
 #output-show-as-pretty-pml-container,
 #output-show-as-auto-magic-container,
+#output-show-as-timeline-container,
 #output-show-as-raw-container {
   display: inline-block;
 }
@@ -149,4 +150,8 @@ h1, h2, h3, h4, h5 {
 }
 .pd11 {
   background-color: #fdd;
+}
+
+.vis-item .vis-item-overflow {
+  overflow: visible !important;
 }
