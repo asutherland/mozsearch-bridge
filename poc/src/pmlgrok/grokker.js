@@ -734,6 +734,23 @@ function grokItemTypeFunction(pml, ctx) {
 const PRINT_DELIM_ARROW = "→";
 
 /**
+ * XXX recursively tries to find the itemTypeName by traversing down the first
+ * child of the given PML nodes, but I think this ends up overlapping with
+ * what grokRootPML was already doing and I was trying to find my place.
+ */
+function findItemType(pml) {
+  if (pml.a && pml.a.itemTypeName) {
+    return pml.a.itemTypeName;
+  }
+
+  if (pml.c) {
+    return findItemType(pml.c[0]);
+  }
+
+  return null;
+}
+
+/**
  * Process root PML nodes which we expect to be blocks that hold an inline
  * result whose attributes describes what we're seeing.
  *
@@ -742,7 +759,23 @@ const PRINT_DELIM_ARROW = "→";
 function grokRootPML(pml, mode, results) {
   const ctx = new GrokContext();
 
+  // XXX I think this was still being speculatively played with previously and
+  // the choice of `grokFunctionArg` was either speculative or over-fitting
+  // based on the deref expansion not being done correctly.
   if (mode === "evaluate") {
+    /*
+    const itemType = findItemType(pml);
+    console.log("Grokking item type:", itemType);
+
+    let result;
+    switch (itemType) {
+      case "function": {
+        result = ctx.runGrokkerOnNode(grokFunctionArg, pml);
+        break;
+      }
+
+    }*/
+
     let result;
     result = ctx.runGrokkerOnNode(grokFunctionArg, pml);
     results.push(result);

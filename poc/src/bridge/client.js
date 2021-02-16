@@ -16,20 +16,33 @@ import { generateId } from './idgen.js'
 import { BroadcastChannelMessageHandler } from './msg_handler.js';
 
 export class BridgeClient extends BroadcastChannelMessageHandler {
-  constructor() {
+  constructor({ onStatusReport }) {
     super('client');
 
+    this.statusReport = null;
+
     this.lookForServers();
+
+    this.onStatusReport = onStatusReport;
   }
 
   lookForServers() {
     this.broadcastMessage('rollcall', {});
   }
 
-  onMsg_helloThisIsServer(_payload, _replyFunc, rawMsg) {
+  onMsg_helloThisIsServer(statusReport, _replyFunc, rawMsg) {
     // Automatically just use whatever pernosco session we most recently heard
     // from.
     this.setTargetBridgeId(rawMsg.senderBridgeId);
     console.log('Messages now target', rawMsg.senderBridgeId);
+
+    this.onMsg_statusReport(statusReport);
+  }
+
+  onMsg_statusReport(statusReport) {
+    this.statusReport = statusReport;
+    if (this.onStatusReport) {
+      this.onStatusReport(statusReport);
+    }
   }
 }

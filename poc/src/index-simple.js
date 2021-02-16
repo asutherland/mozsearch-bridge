@@ -8,7 +8,22 @@ import { grokPML, grokPMLRows } from './pmlgrok/grokker.js';
 console.log('app js loaded');
 
 let gNextReqId = 1;
-let client = new BridgeClient();
+let client = new BridgeClient({
+  onStatusReport(statusReport) {
+    const statusElem = document.getElementById('status-content');
+    statusElem.innerHTML = "";
+    //statusElem.appendChild(prettifyData(statusReport));
+    /*
+    if (statusReport.annotation) {
+      prettifyPmlInto(statusReport.annotation, statusElem);
+    }
+    */
+    if (statusReport.focus) {
+      const moment = statusReport.focus.moment;
+      statusElem.textContent = `Event: ${moment.event} Instr: ${moment.instr}`;
+    }
+  },
+});
 
 /**
  * This produces nightmarish reflows; reproduction distilled with profile at
@@ -214,12 +229,14 @@ function prettifyPmlInto(node, into, depth=0) {
         continue;
       }
 
-      if (key === "derefable") {
+      if (key === "deref") {
         const btn = document.createElement('input');
         btn.type = 'button';
         btn.value = 'Deref';
-        // Our `value` is null; we want the sibling values.
-        btn.derefData = node.a.data;
+        // Previously, the `value` was null and we wanted the sibling `data`
+        // value, but now the value contains the request to use.  (Or maybe I
+        // always had this wrong?)
+        btn.derefData = value;
         btn.derefMoment = node.a.dataMoment;
         // The deref action will also need the `usingFocus` of the first
         // ancestor with a `usingFocus`, with the dataMoment clobbering the
@@ -275,6 +292,10 @@ function prettifyQueryResults(rowHandler, resultRows, mode) {
   if (mode === 'evaluate') {
     // Evaluate returns an array of objects with just "value" as the payload
     // because they're a fixup to an existing PML tree.
+    //
+    // XXX: querySearchEvaluate which uses a "search" right now re-synthesizes
+    // things into this rep, but the above claim about evaluate may now be
+    // wrong-ish?
     for (const row of resultRows) {
       if ('value' in row) {
         rowHandler(row.value, frag, 0, mode);
@@ -511,6 +532,72 @@ async function queryDeref(focus, data, moment) {
 }
 
 /**
+ * Search evaluations can come back wrapped as [inline, explorable, inline]
+ * where we can pierce the outer inline and explorable and return just the
+ * inner inline.
+ */
+function pmlUnwrapExplorable(node) {
+  if (node.t !== 'inline' || node.c.length !== 1) {
+    return node;
+  }
+  let inner = node.c[0];
+  if (inner.t !== 'explorable' || inner.c.length !== 1) {
+    return node;
+  }
+  return inner.c[0];
+}
+
+/**
+ * Use the search box pretty printing mechanism to initiate a search which
+ * should result in an evaluation.
+ */
+async function querySearchEvaluate(symName) {
+  const eOutput = document.getElementById('output-content');
+  // This is our brand for ensuring we still should be the one outputting there.
+  const reqId = eOutput.reqId = gNextReqId++;
+
+  const rawResults = await client.sendMessageAwaitingReply(
+    'simpleQuery',
+    {
+      name: 'search',
+      mixArgs: {
+        focus: client.statusReport.focus,
+        input: symName,
+        maxResults: 10,
+      },
+    });
+
+  let results = [];
+  console.log('raw results', rawResults);
+  for (const outerRow of rawResults) {
+    if (!outerRow.results) {
+      continue;
+    }
+
+    for (const row of outerRow.results) {
+      // We expect a row with { action: { evaluation: { pml: pmlNode } },
+      // description: pmlNode }
+      if (!row.action || !row.action.evaluation) {
+        continue;
+      }
+
+      // We're directly interested in the evaluation, so just use its pmlNode.
+      let pmlNode = pmlUnwrapExplorable(row.action.evaluation.pml);
+      // We wrap this to look like what prettifyQueryResults expects for
+      // "evaluate".
+      results.push({ value: pmlNode });
+    }
+  }
+
+  if (eOutput.reqId === reqId) {
+    prettifyQueryResultsInto(results, eOutput, 'evaluate');
+  }
+}
+
+/**
+ * XXX not currently usable without the full context, right now use
+ * querySearchEvaluate
+ *
  * Request an evaluation.  There appear to be the following variations of this:
  * 1. The client requesting an expansion of a `payload` that contains the
  *    server-provided `data` from a previous PML response.
@@ -518,8 +605,9 @@ async function queryDeref(focus, data, moment) {
  *    - "focus": The current UI focus
  *    - "expression": The word that was hovered over in the source.
  *    - "context": [Source URL, line number, 1]
+ * 3. Typing an expression into the search bar up top (new!)
  */
-async function queryEvaluate() {
+async function queryEvaluate(symName) {
   const eOutput = document.getElementById('output-content');
   // This is our brand for ensuring we still should be the one outputting there.
   const reqId = eOutput.reqId = gNextReqId++;
@@ -529,8 +617,11 @@ async function queryEvaluate() {
     {
       name: 'evaluate',
       mixArgs: {
-        focus,
-        payload: {}
+        focus: client.statusReport.focus,
+        payload: {
+          expression: symName,
+          //context: [client.statusReport.source.url, null],
+        }
       },
     });
 
@@ -561,6 +652,13 @@ window.addEventListener('load', () => {
     const symPrint = eSymPrint.value || undefined;
 
     queryExecutions(symName, symPrint);
+  });
+
+  document.getElementById('eval-symbol-run').addEventListener('click', (evt) => {
+    const eSymName = document.getElementById('eval-symbol-name');
+    const symName = eSymName.value;
+
+    querySearchEvaluate(symName);
   });
 
   document.getElementById('show-current-tasks').addEventListener('click', (evt) => {

@@ -19,12 +19,27 @@ export class BridgeServer extends OutsideIframeMessageHandler {
   constructor(args) {
     super(args);
 
+    if (args.pclient) {
+      this.pclient = args.pclient;
+    }
+
     this.announce();
+  }
+
+  generateStatusReportPayload() {
+    return {};
   }
 
   announce() {
     // This is a reference to the "hello, this is dog" meme.
-    this.broadcastMessage('helloThisIsServer', {});
+    this.broadcastMessage(
+      'helloThisIsServer',
+      {
+        // We provide the current status as part of the broadcast so that the
+        // client can always have current status information that is updated as
+        // things change in the pernosco session.
+        status: this.generateStatusReportPayload(),
+      });
   }
 
   onMsg_rollcall(msg) {
