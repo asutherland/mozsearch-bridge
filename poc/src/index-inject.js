@@ -134,9 +134,9 @@ class BridgeHelperView {
 
   _register() {
     // Unregister any previously existing view.
-    const oldView = this.pclient.getViewByName(this.queryName);
+    //const oldView = this.pclient.getViewByName(this.queryName);
     // There's a removeView but it assumes layout is involved.
-    this.pclient.views.delete(oldView);
+    //this.pclient.views.delete(oldView);
     // But this currently doesn't involve layout.
     this.pclient.addView(this);
   }
