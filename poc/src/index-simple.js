@@ -3,6 +3,8 @@ import { BridgeClient } from './bridge/client.js';
 import { Timeline } from "vis-timeline/peer";
 import { DataSet } from "vis-data/peer";
 
+import { loadAnalyzer } from './analyzer/analyzer.js';
+
 import { grokPML, grokPMLRows } from './pmlgrok/grokker.js';
 
 console.log('app js loaded');
@@ -289,7 +291,11 @@ function grokAndPrettifyInto(node, into, depth=0, mode) {
 function prettifyQueryResults(rowHandler, resultRows, mode) {
   const frag = new DocumentFragment();
 
-  if (mode === 'evaluate') {
+  if (mode === 'analyzed') {
+    for (const row of resultRows) {
+      rowHandler(row, frag, 0, mode);
+    }
+  } else if (mode === 'evaluate') {
     // Evaluate returns an array of objects with just "value" as the payload
     // because they're a fixup to an existing PML tree.
     //
@@ -532,6 +538,56 @@ async function queryDeref(focus, data, moment) {
 }
 
 /**
+ * Synthesize an evaluate request for a memory address and given length.
+ *
+ * TODO: Support also using an already known dwarf type to impose a type view
+ * on a given piece of memory.
+ *
+ * In general the goal here is to provide a means to provide hand-rolled glue
+ * logic to help bridge pretty printing gaps that pernosco couldn't possibly
+ * understand from the type system like nsTHashtable.
+ */
+async function queryMemory(memAddr, memLength) {
+  const eOutput = document.getElementById('output-content');
+  // This is our brand for ensuring we still should be the one outputting there.
+  const reqId = eOutput.reqId = gNextReqId++;
+
+  const focus = client.statusReport.focus;
+
+  const results = await client.sendMessageAwaitingReply(
+    'simpleQuery',
+    {
+      name: 'evaluate',
+      mixArgs: {
+        focus,
+        payload: {
+          data: {
+            producer: {
+              memory: {
+                addressSpace: focus.frame.addressSpaceUid,
+                padWithUnmapped: memLength,
+                ranges: [
+                  {
+                    end: memAddr + memLength,
+                    start: memAddr,
+                  }
+                ]
+              }
+            },
+            renderer: {
+              pointer: 64,
+            }
+          }
+        }
+      },
+    });
+
+  if (eOutput.reqId === reqId) {
+    prettifyQueryResultsInto(results, eOutput, 'evaluate');
+  }
+}
+
+/**
  * Search evaluations can come back wrapped as [inline, explorable, inline]
  * where we can pierce the outer inline and explorable and return just the
  * inner inline.
@@ -630,6 +686,27 @@ async function queryEvaluate(symName) {
   }
 }
 
+async function runAnalyzer() {
+  const eOutput = document.getElementById('output-content');
+  const eStatus = document.getElementById('status-content');
+
+  // This is our brand for ensuring we still should be the one outputting there.
+  const reqId = eOutput.reqId = gNextReqId++;
+
+  eStatus.textContent = '';
+
+  const analyzer = await loadAnalyzer('toml-configs/blobs.toml');
+  const results = await analyzer.analyze(
+    client,
+    (state, details) => {
+      eStatus.textContent = state;
+    });
+
+  if (eOutput.reqId === reqId) {
+    prettifyQueryResultsInto(results, eOutput, 'raw');
+  }
+}
+
 let gLastFocus = null;
 
 function findClosestFocus(target, initialFocus=null) {
@@ -641,6 +718,38 @@ function findClosestFocus(target, initialFocus=null) {
     }
   }
   return focus;
+}
+
+function humanParseInt(str) {
+  if (str.startsWith('0x')) {
+    return parseInt(str, 16);
+  }
+  return parseInt(str, 10);
+}
+
+/**
+ * Tab mechanism derived from about:networking's as it was readily available and
+ * I thought it might be more accessible than I think it may be.
+ */
+function showTab(newHeaderElem) {
+  const match = /tab-header-(.+)/.exec(newHeaderElem.id);
+  const newTabName = match[1];
+
+  console.log('switching to tab', newTabName);
+
+  const oldHeaderElem = document.querySelector('[selected=true]');
+  const oldTabElem = document.querySelector('.tab.active');
+
+  oldTabElem.classList.remove('active');
+  oldTabElem.hidden = true;
+  oldHeaderElem.removeAttribute('selected');
+
+  const newTabElem = document.getElementById(`tab-${newTabName}`);
+  newTabElem.classList.add('active');
+  newTabElem.hidden = false;
+  newHeaderElem.setAttribute('selected', true);
+
+  location.hash = newTabName;
 }
 
 window.addEventListener('load', () => {
@@ -661,8 +770,22 @@ window.addEventListener('load', () => {
     querySearchEvaluate(symName);
   });
 
+  document.getElementById('mem-run').addEventListener('click', (evt) => {
+    const eAddr = document.getElementById('mem-address');
+    const addr = humanParseInt(eAddr.value);
+
+    const eLength = document.getElementById('mem-length');
+    const length = humanParseInt(eLength.value);
+
+    queryMemory(addr, length);
+  });
+
   document.getElementById('show-current-tasks').addEventListener('click', (evt) => {
     queryCurrentTasks();
+  });
+
+  document.getElementById('analyze-run').addEventListener('click', (evt) => {
+    runAnalyzer();
   });
 
   document.getElementById('output-show-as-form').addEventListener('change', (evt) => {
@@ -708,6 +831,19 @@ window.addEventListener('load', () => {
       return;
     }
   });
+
+  const eTabHeaders = document.getElementById('tab-headers');
+  eTabHeaders.addEventListener('click', (evt) => {
+    if (evt.target && evt.target.parentNode === eTabHeaders) {
+      showTab(evt.target);
+    }
+  });
+
+  if (location.hash) {
+    const useHeaderElem =
+      document.getElementById(`tab-header-${location.hash.substring(1)}`);
+    showTab(useHeaderElem);
+  }
 
   // Get the current "show-as" value, which may have been propagated from a
   // reload carrying prior form data forward.

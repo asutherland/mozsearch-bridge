@@ -1,0 +1,10 @@
+[trace."mozilla::dom::ContentParent::TransmitBlobURLsForPrincipal"]
+capture=[
+  ["aPrincipal->mKind"]
+]
+
+[class."mozilla::dom::ContentParent"]
+state=[
+  ["mRemoteType"],
+  ["mSubprocess->mChildProcessHandle"]
+]

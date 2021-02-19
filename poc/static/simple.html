@@ -7,16 +7,38 @@
   </head>
 <body>
   <div id="ui-region" class="region">
-    <h3>Show Executions</h3>
-    <input id="symbol-name" type="text" size="100" placeholder="symbol" />
-    <input id="symbol-print" type="text" size="40" placeholder="print expression" />
-    <input id="show-symbol" type="button" value="Show Symbol Executions" />
-    <hr />
-    <h3>Evaluate Symbol at Current Location</h3>
-    <input id="eval-symbol-name" type="text" size="100" placeholder="symbol" />
-    <input id="eval-symbol-run" type="button" value="Evaluate Symbol" />
-    <hr />
-    <input id="show-current-tasks" type="button" value="Show Current Tasks" />
+    <div id="tab-region">
+      <div id="tab-headers">
+        <h3 class="tab-header" id="tab-header-executions" selected="true">Show Executions</h3>
+        <h3 class="tab-header" id="tab-header-eval">Evaluate Symbol</h3>
+        <h3 class="tab-header" id="tab-header-mem">Memory Location</h3>
+        <h3 class="tab-header" id="tab-header-analyzer">Analyzer (TOML Config)</h3>
+        <h3 class="tab-header" id="tab-header-canned">Canned</h3>
+      </div>
+      <hr />
+      <div id="tab-contents">
+        <div id="tab-executions" class="tab active">
+        <input id="symbol-name" type="text" size="100" placeholder="symbol" />
+        <input id="symbol-print" type="text" size="40" placeholder="print expression" />
+        <input id="show-symbol" type="button" value="Show Symbol Executions" />
+      </div>
+      <div id="tab-eval" class="tab" hidden=true>
+        <input id="eval-symbol-name" type="text" size="100" placeholder="symbol" />
+        <input id="eval-symbol-run" type="button" value="Evaluate Symbol" />
+      </div>
+      <div id="tab-mem" class="tab" hidden=true>
+        <input id="mem-address" type="text" size="20" placeholder="0xADDRESS" />
+        <input id="mem-length" type="text" size="8" placeholder="bytes" />
+        <input id="mem-run" type="button" value="Show Memory" />
+      </div>
+      <div id="tab-analyzer" class="tab" hidden=true>
+        <input id="analyze-run" type="button" value="Run Analysis" />
+      </div>
+      <div id="tab-canned" class="tab" hidden=true>
+        <input id="show-current-tasks" type="button" value="Show Current Tasks" />
+      </div>
+      </div>
+    </div>
   </div>
   <div id="status-region" class="region">
     <h3>Status</h3>

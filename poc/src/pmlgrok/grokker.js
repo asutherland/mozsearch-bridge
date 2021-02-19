@@ -53,11 +53,31 @@ class GrokContext {
     return pml && pml.t === "inline";
   }
 
+  // True if there's a single child that's a string
   isSoleString(pml) {
     if (!pml || !pml.c) {
       return false;
     }
     return (pml.c.length === 1 && typeof(pml.c[0]) === "string");
+  }
+
+  // True if there are only 2 children and they're both strings.  This can
+  // happen in situations where a raw pointer address is being dereferenced
+  // (or rather that's how it's being presented).
+  isDoubleString(pml) {
+    if (!pml || !pml.c) {
+      return false;
+    }
+    return pml.c.length === 2 &&
+           typeof(pml.c[0]) === "string" &&
+           typeof(pml.c[1]) === "string";
+  }
+
+  hasSoleChildOfType(pml, childType) {
+    if (!pml || !pml.c) {
+      return false;
+    }
+    return (pml.c.length === 1 && typeof(pml.c[0]) === childType);
   }
 
   isArraySubscripting(pml) {
@@ -529,9 +549,19 @@ function grokValue(pml, ctx) {
 
 /**
  * Process the results of an "executions of" "print" arg results.
+ *
+ * We currently expect these to be an inline with "data" and "dataMoment"
+ * attributes that wraps an inline that is the actual printable result.
  */
 function grokPrinted(pml, ctx) {
-  return grokValue(pml, ctx);
+  if (!ctx.isInline(pml) || pml.c.length !== 1) {
+    return "weird print";
+  }
+
+  return {
+    name: pml.a.data.producer.subrange.name,
+    value: ctx.runGrokkerOnNode(grokValue, pml.c[0]),
+  };
 }
 
 function grokIdent(pml, ctx) {
@@ -603,6 +633,14 @@ function grokFunctionArgName(pml, ctx) {
         name: ctx.getSoleString(pml),
       },
       value: undefined,
+    };
+  }
+
+  // ## Stringified pointer case: 2 children "*" "hex address"
+  if (ctx.isInline(pml) && ctx.isDoubleString(pml) && pml.c[0] === "*") {
+    return {
+      ident: null,
+      value: pml.c[1]
     };
   }
 

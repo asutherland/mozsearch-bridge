@@ -1,0 +1,3 @@
+[trace."mozilla::dom::ServiceWorkerRegistrationInfo::FinishActivate"]
+
+[trace."mozilla::dom::ServiceWorkerUpdateJob::ComparisonResult"]
