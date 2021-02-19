@@ -73,11 +73,12 @@ class Analyzer {
 
     const print = printParts ? printParts.join(', ') : undefined;
 
-    const results = await this.client.sendMessageAwaitingReply(
+    // This will be an array of items of the form { items: [ { focus, pml }]}
+    const rawResults = await this.client.sendMessageAwaitingReply(
       'executionQuery',
       { symbol: symName, print });
 
-    this.allResults.push(...results);
+    this.allResults.push(...rawResults);
   }
 }
 

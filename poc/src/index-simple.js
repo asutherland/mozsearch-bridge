@@ -23,6 +23,10 @@ let client = new BridgeClient({
     if (statusReport.focus) {
       const moment = statusReport.focus.moment;
       statusElem.textContent = `Event: ${moment.event} Instr: ${moment.instr}`;
+
+      if (gTimeline) {
+        gTimeline.setCustomTime(moment.event, "focus");
+      }
     }
   },
 });
@@ -359,7 +363,12 @@ function renderTimeline(rows, container) {
     const data = gTimelineData;
 
     const results = grokPMLRows(rows);
-    for (const call of results) {
+    for (let call of results) {
+      let printed = null;
+      if (call.queried) {
+        printed = call.printed;
+        call = call.queried;
+      }
       const { pid, tid } = call.meta;
       let pidGroup = groups.get(pid);
       if (!pidGroup) {
@@ -386,14 +395,26 @@ function renderTimeline(rows, container) {
         }
       }
 
+      let content = shortSymbolName(call.func.name);
+      if (printed) {
+        for (const item of printed) {
+          if (item.value && item.value.data) {
+            content += `<br>${item.name}: ${item.value.data}`;
+          }
+        }
+      }
+
       let dataId = gTimelineDataGen++;
       data.add({
         id: dataId,
         group: tid,
-        content: shortSymbolName(call.func.name),
+        content,
         type: call.meta.returnMoment ? 'range' : 'box',
         start: call.meta.entryMoment.event,
         end: call.meta.returnMoment ? call.meta.returnMoment.event : null,
+        extra: {
+          focus: call.meta.focusInfo,
+        },
       });
     }
   }
@@ -402,6 +423,7 @@ function renderTimeline(rows, container) {
     groupOrder: 'id',
     zoomMin: 10,
     zoomMax: 1 * 1000 * 1000,
+    zoomFriction: 40,
     format: {
       minorLabels: function(date/*, scale/*, step*/) {
         const relTicks = Math.floor(date * EVENT_SCALE / 1000000);
@@ -416,6 +438,20 @@ function renderTimeline(rows, container) {
 
   if (!gTimeline) {
     gTimeline = new Timeline(container, gTimelineData, gTimelineGroups, options);
+    let customTime = 0;
+    if (client.statusReport && client.statusReport.focus &&
+        client.statusReport.focus.moment) {
+      customTime = client.statusReport.focus.moment.event;
+    }
+    gTimeline.addCustomTime(customTime, "focus");
+    gTimeline.on('select', ({items, event}) => {
+      if (items.length !== 1) {
+        return;
+      }
+      const item = gTimelineData.get(items[0]);
+      console.log('Trying to focus', item);
+      client.setFocus(item.extra.focus);
+    });
   }
 }
 
@@ -695,7 +731,9 @@ async function runAnalyzer() {
 
   eStatus.textContent = '';
 
-  const analyzer = await loadAnalyzer('toml-configs/blobs.toml');
+  const analyzer = await loadAnalyzer('toml-configs/sw-lifecycle.toml');
+  // The results are currently just the aggregation of all the underlying
+  // queries.
   const results = await analyzer.analyze(
     client,
     (state, details) => {

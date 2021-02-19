@@ -30,6 +30,10 @@ export class BridgeClient extends BroadcastChannelMessageHandler {
     this.broadcastMessage('rollcall', {});
   }
 
+  setFocus(focus) {
+    this.sendMessage('focus', { focus });
+  }
+
   onMsg_helloThisIsServer(statusReport, _replyFunc, rawMsg) {
     // Automatically just use whatever pernosco session we most recently heard
     // from.

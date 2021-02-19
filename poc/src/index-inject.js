@@ -280,6 +280,13 @@ class POCServer extends BridgeServer {
     this.broadcastMessage('statusReport', this.generateStatusReportPayload(options));
   }
 
+  onMsg_focus({ focus, source }) {
+    console.log('Setting focus to', focus);
+    this.pclient.willSetFocus(this.bridgeHelperView);
+    // TODO: Allow propagating the annotation.
+    this.pclient.setFocus(focus, source, this.bridgeHelperView, {});
+  }
+
   /**
    * A means of requiring that current status be generated on-demand, but in
    * general

@@ -558,8 +558,11 @@ function grokPrinted(pml, ctx) {
     return "weird print";
   }
 
+  const producer = pml.a.data && pml.a.data.producer;
+  const producerSubrange = producer && producer.subrange;
+
   return {
-    name: pml.a.data.producer.subrange.name,
+    name: producerSubrange ? producerSubrange.name : "???",
     value: ctx.runGrokkerOnNode(grokValue, pml.c[0]),
   };
 }
@@ -764,6 +767,7 @@ function grokItemTypeFunction(pml, ctx) {
     tid: focusInfo.tuid.tid,
     entryMoment: focusInfo.frame.entryMoment,
     returnMoment: focusInfo.frame.returnMoment,
+    focusInfo,
   };
 
   return result;
