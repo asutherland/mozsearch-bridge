@@ -25,7 +25,18 @@ let client = new BridgeClient({
       statusElem.textContent = `Event: ${moment.event} Instr: ${moment.instr}`;
 
       if (gTimeline) {
+        // Set the marker for the current focus point.
         gTimeline.setCustomTime(moment.event, "focus");
+
+        // Check whether the focus point is visible for the current visible time
+        // window and if not move the timeline so that it's centered.  We do
+        // this conditionally to avoid moving the timeline unless necessary;
+        // this is important because moving the timeline can impact layout and
+        // the user's understanding of what they're looking at.
+        const { start, end } = gTimeline.getWindow();
+        if (moment.event < start || moment.event > end) {
+          gTimeline.moveTo(moment.event);
+        }
       }
     }
   },
@@ -409,9 +420,9 @@ function renderTimeline(rows, container) {
         id: dataId,
         group: tid,
         content,
-        type: call.meta.returnMoment ? 'range' : 'box',
+        type: 'range',
         start: call.meta.entryMoment.event,
-        end: call.meta.returnMoment ? call.meta.returnMoment.event : null,
+        end: call.meta.returnMoment ? call.meta.returnMoment.event : call.meta.entryMoment.event,
         extra: {
           focus: call.meta.focusInfo,
         },
@@ -424,6 +435,7 @@ function renderTimeline(rows, container) {
     zoomMin: 10,
     zoomMax: 1 * 1000 * 1000,
     zoomFriction: 40,
+    showCurrentTime: false,
     format: {
       minorLabels: function(date/*, scale/*, step*/) {
         const relTicks = Math.floor(date * EVENT_SCALE / 1000000);
@@ -731,7 +743,7 @@ async function runAnalyzer() {
 
   eStatus.textContent = '';
 
-  const analyzer = await loadAnalyzer('toml-configs/sw-lifecycle.toml');
+  const analyzer = await loadAnalyzer('toml-configs/idb.toml');
   // The results are currently just the aggregation of all the underlying
   // queries.
   const results = await analyzer.analyze(

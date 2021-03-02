@@ -1,73 +1,389 @@
 import parse from '@iarna/toml/parse-string';
 
+import { grokPML, grokPMLRows } from '../pmlgrok/grokker.js';
+
+function shortSymbolName(name) {
+  const parts = name.split('::');
+  return parts.slice(-2).join('::');
+}
+
+function deriveClassConstructor(name) {
+  const parts = name.split('::');
+  parts.push(parts[parts.length - 1]);
+  return parse.join('::');
+}
+
+function deriveClassDestructor(name) {
+  const parts = name.split('::');
+  parts.push('~' + parts[parts.length - 1]);
+  return parse.join('::');
+}
+
+// Assemble a PidPtr from a pid (process id) and pointer (hex string of a
+// pointer).
+function makePidPtr(pid, ptr) {
+  return `${pid}:${ptr}`;
+}
+
+function makePidPtrUsingFocusInfo(focusInfo, ptr) {
+  const pid = focusInfo.frame.addressSpaceUid.task.tid;
+  return makePidPtr(pid, ptr);
+}
+
+function cmpMoment(a, b) {
+  if (a.event < b.event) {
+    return -1;
+  }
+  if (a.event > b.event) {
+    return 1;
+  }
+  // a.event === b.event
+  if (a.instr < b.instr) {
+    return -1;
+  }
+  if (a.instr > b.instr) {
+    return 1;
+  }
+  return 0;
+}
+
+// Given a symbol name, pop off the last segment assuming it's a method.
+// Returns null if there was only 1 segment.
+function classNameFromMethod(symName) {
+  const idxDouble = symName.lastIndexOf('::');
+  if (idxDouble === -1) {
+    return null;
+  }
+  const className = symName.substring(0, idxDouble);
+  return className;
+}
+
 class AnalyzerConfig {
   constructor(rawConfig) {
     this.rawConfig = rawConfig;
 
     this.tomlConfig = parse(rawConfig);
+
+    // The prefix that should be asumed for all classes referenced in the
+    // config file.  `normalizeSymName` uses this.
+    this.nsPrefix = this.tomlConfig.namespace?.prefix || '';
+
+    // Map from full class name to information about the class.
+    this.classInfoMap = new Map();
+
+    this.semTypeToClassInfo = new Map();
+
+    // Methods to trace
+    this.traceMethods = [];
+
+    this._processConfig();
+  }
+
+  /**
+   * Helper to apply the `namespace.prefix` to all symbol names.
+   *
+   * TODO: In the near future we'll probably need a way to express symbols that
+   * should not just have the prefix applied.  Like using "::" at the start
+   * to indicate that we should pop the last namespace (which is likely
+   * "(anonymous namespace)") or view "mozilla::" at the start as an absolute
+   * namespace usage via hardcoding that could be overridden.
+   */
+  normalizeSymName(rawName) {
+    return this.nsPrefix + rawName;
+  }
+
+  /**
+   * Get the ClassInfo for a symName, creating it if it doesn't already exist.
+   * See inline docs below about what the object containts.
+   */
+  getOrCreateClass(symName,) {
+    let classInfo = this.classInfoMap.get(symName);
+    if (classInfo) {
+      return classInfo;
+    }
+
+    classInfo = {
+      name: symName,
+      semType: null,
+      trackLifecycle: false,
+      // Immediate (non-transitive) subclasses, currently comes directly from
+      // typeinfo (and which can be a simplification of reality).
+      subclasses: new Set(),
+      // Immediate superclasses, currently inferred from "subclasses".
+      superclasses: new Set(),
+      identityDefs: [],
+      // This is populated by Analyzer._deriveHierarchies
+      identityLinkTypes: {},
+    };
+    this.classInfoMap.set(symName, classInfo);
+    return classInfo;
+  }
+
+  /**
+   * Process the configuration from a hopefully compact human-friendly TOML
+   * file into a more immediately consumable representation for the Analyzer.
+   */
+  _processConfig() {
+    this._processTypeInfo(this.tomlConfig.typeinfo);
+    this._processClassInfo(this.tomlConfig.class);
+    this._processTraceInfo(this.tomlConfig.trace);
+  }
+
+  /**
+   * Process the "typeinfo" top-level dictionary in the configuration file which
+   * provides us with class hierarchy information that we should really be able
+   * to automatically extract from searchfox or pernosco, but currently cannot.
+   * (Bug 1641372 tracks the work in searchfox to get this information landed
+   * from the fancy branch.)
+   */
+  _processTypeInfo(typeInfo) {
+    if (!typeinfo) {
+      return;
+    }
+
+    for (const [rawClassName, rawInfo] of Object.entries(typeInfo)) {
+      const className = this.normalizeSymName(rawClassName);
+
+      const classInfo = this.getOrCreateClass(className);
+      if (rawInfo.subclasses) {
+        for (const rawSubclassName of rawInfo.subclasses) {
+          const subclassName = this.normalizeSymName(rawSubclassName);
+          const subclassInfo = this.getOrCreateClass(subclassName);
+
+          classInfo.subclasses.add(subclassInfo);
+          subclassInfo.superclasses.add(classInfo);
+        }
+      }
+    }
+  }
+
+  /**
+   * Process the "class" top-level dictionary which centralizes information
+   * about a class's identity and states.  During analysis, it's assumed that
+   * all subclasses want all of this info from all their ancestors.
+   */
+  _processClassInfo(rawClassDict) {
+    if (!rawClassDict) {
+      return;
+    }
+
+    for (const [rawClassName, rawInfo] of Object.entries(rawClassDict)) {
+      const className = this.normalizeSymName(rawClassName);
+      const classInfo = this.getOrCreateClass(className);
+
+      if (rawInfo.semType) {
+        classInfo.semType = rawInfo.semType;
+        this.semTypeToClassInfo.set(classInfo.semType, classInfo);
+      }
+      if (rawInfo.lifecycle) {
+        classInfo.trackLifecycle = true;
+      }
+
+      // Lifecycle currently means that we automatically trace the constructors
+      // and destructors, sampling the identity attributes at destructor time
+      // so that we can build an object instance for hierarchy purposes.
+      if (classInfo.trackLifecycle) {
+        this.traceMethods.push({
+          symName: deriveClassConstructor(className),
+          mode: 'constructor',
+          classInfo,
+          capture: null,
+        });
+        this.traceMethods.push({
+          symName: deriveClassDestructor(className),
+          mode: 'destructor',
+          classInfo,
+          capture: null,
+        });
+      }
+
+      if (rawInfo.identity) {
+        for (const [name, capInfo] of Object.entries(rawInfo.identity)) {
+          classInfo.identityDefs.push({
+            name,
+            eval: capInfo.eval,
+          });
+        }
+      }
+    }
+  }
+
+  /**
+   * Process the "trace" top-level dictionary that contains information about
+   * methods that we explicitly want to trace.  In the future this might
+   * largely be mooted by other mechanisms where interest is expressed just at
+   * the class level or via other means of heuristic determination and iterative
+   * deepening rather than potentially massively over-tracing (and requiring a
+   * lot of manual method enumeration).
+   */
+  _processTraceInfo(rawTraceDict) {
+    for (const [rawSymName, rawInfo] of Object.entries(rawTraceDict)) {
+      const symName = this.normalizeSymName(rawSymName);
+      const className = classNameFromMethod(symName);
+      const classInfo = this.getOrCreateClass(className);
+
+      this.traceMethods.push({
+        symName,
+        mode: 'trace',
+        classInfo,
+        capture: rawInfo.capture,
+      });
+    }
   }
 }
 
+/**
+ * The Analyzer takes a TOML config that describes methods and classes in a
+ * given subsystem and performs a series of pernosco queries in order to build
+ * up one or more group hierarchies over time-series representations of method
+ * calls and derived states.
+ */
 class Analyzer {
   constructor(config) {
     this.config = config;
 
     this.client = null;
-    this.allResults = [];
+    this.allQueryResults = [];
+
+    // Map from symbol/method name to a TraceResult record; does not include
+    // automatically generated class lifecycle traces which end up in
+    // `classResults`.
+    this.traceResultsMap = new Map();
+    // Map from class (symbol) name to { classInfo, constructorTraceResults,
+    // destructorTraceResults } and which may be expanded in the future.
+    this.classResultsMap = new Map();
+
+    // Key is a `semType`, value is a Map whose keys are PidPtr strings (that
+    // combine a process id and hex string value for memory space uniqueness)
+    // and values are arrays of instances with start/end values.
+    this.semTypeToInstanceMap = new Map();
+
+    // Key is an identity that wasn't a semType.
+    this.conceptToInstanceMap = new Map();
+  }
+
+  _getOrCreateClassResults(classInfo) {
+    let classResults = this.classResultsMap.get(classInfo.name);
+    if (!classResults) {
+      classResults = {
+        classInfo,
+        // The idea is that we unify over all constructors here.
+        // TODO: Make sure we actually unify over all constructors.
+        constructorTraceResults: null,
+        destructorTraceResults: null,
+      };
+      this.classResultsMap.set(classInfo.name, classResults);
+    }
+    return classResults;
+  }
+
+  _getOrCreateConceptInstance(name, value) {
+    let conceptInstMap = this.conceptToInstanceMap.get(name);
+    if (!conceptInstMap) {
+      conceptInstMap = new Map();
+      this.conceptToInstanceMap.set(name, conceptInstMap);
+    }
+    let conceptInst = conceptInstMap.get(value);
+    if (!conceptInst) {
+      conceptInst = {
+        name: value,
+      };
+      conceptInstMap.set(value, conceptInst);
+    }
+    return conceptInst;
+  }
+
+  // Get the instance characterized by the given pidPtr at the provided moment.
+  // Our approach here is intentionally a little fuzzy since we current expect
+  // to be performing lifecycle analyses at object destruction time and it's
+  // conceivable for the destructions to have stale-ish pointers.  So we're
+  // really asking what was the most recent instance for this address at the
+  // given moment, even if it theoretically is already destroyed.
+  _getSemTypeInstance(semType, pidPtr, moment) {
+    const instanceMap = this.semTypeToInstanceMap.get(semType);
+    if (!instanceMap) {
+      return null;
+    }
+
+    const instList = instanceMap.get(pidPtr);
+    if (!instList) {
+      return null;
+    }
+
+    let last = null;
+    for (const inst of instList) {
+      switch (cmpMoment(inst.constructionMoment, moment)) {
+        default:
+        case -1: {
+          last = inst;
+          break;
+        }
+        case 0:
+        case 1: {
+          return last;
+        }
+      }
+    }
+
+    return last;
   }
 
   async analyze(client, progressCallback) {
-    console.log('Analyzing using config', this.config);
+    const config = this.config;
+    console.log('Analyzing using config', config);
     const tomlConfig = this.config.tomlConfig;
 
     this.client = client;
-    const allResults = this.allResults = [];
+    const allQueryResults = this.allQueryResults = [];
 
-    console.log("traversing", tomlConfig.trace);
-    for (const [symName, info] of Object.entries(tomlConfig.trace)) {
-      console.log('Tracing', symName, info);
-      progressCallback(`Tracing ${symName}`, {});
-      await this._doTrace(symName, info || {});
+    // ## Phase 1: Trace methods of interest, noting interesting instances
+    for (const traceDef of config.traceMethods) {
+      console.log('Tracing', traceDef.symName, traceDef);
+      progressCallback(`Tracing ${traceDef.symName}`, {});
+      await this._doTrace(traceDef);
     }
 
-    progressCallback('Done', {});
+    // ## Phase 2: Derive instances
+    this._deriveInstances();
 
-    console.log('Results', allResults);
-    return allResults;
+    // ## Phase 3: Derive hierarchies amongst the life-lines
+    this._deriveHierarchies();
+
+    console.log('Results', allQueryResults);
+    return [];
   }
 
-  _lookupClassInfoFromSymbol(symName) {
-    const tomlConfig = this.config.tomlConfig;
-    if (!tomlConfig['class']) {
-      return null;
-    }
-
-    const idxDouble = symName.lastIndexOf('::');
-    if (idxDouble === -1) {
-      return null;
-    }
-    const className = symName.substring(0, idxDouble);
-    const classInfo = this.config.tomlConfig['class'][className];
-    return classInfo || null;
-  }
-
-  async _doTrace(symName, info) {
+  async _doTrace(traceDef) {
+    const { symName } = traceDef;
     const classInfo = this._lookupClassInfoFromSymbol(symName);
-    let printParts =
-      (info.capture || (classInfo && classInfo.state)) ? [] : undefined;
+    const usePrint = info.capture ||
+                     (classInfo && (classInfo.state || classInfo.identity));
+    const printParts = usePrint ? [] : undefined;
+    const printNames = usePrint ? [] : undefined;
+    const printSources = usePrint ? [] : undefined;
 
     if (info.capture) {
       for (const captureParam of info.capture) {
-        // Currently we imitate tricelog which wants the parameters separated,
-        // but there can be 2 types of traversal, so we're also allowing
-        // single-argument full traversals... but let's join things the likely
-        // way for multi-arg.
-        printParts.push(captureParam.join('->'));
+        printParts.push(captureParam);
+        printNames.push(captureParam);
+        printSources.push('capture');
       }
     }
     if (classInfo && classInfo.state) {
       for (const stateParam of classInfo.state) {
-        printParts.push(`this->${stateParam.join('->')}`);
+        printParts.push(`this->${stateParam}`);
+        printNames.push(stateParam);
+        printSources.push('classState');
+      }
+    }
+    // If this is a class that has its lifecycle tracked, then there's no need
+    // to extract the identity on anything but the destructor.
+    if (classInfo && classInfo.identity &&
+        (!classInfo.trackLifecycle || traceDef.mode === 'destructor')) {
+      for (const [name, print] of Object.entries(classInfo.identity)) {
+        printParts.push(print);
+        printNames.push(name);
+        printSources.push('identity');
       }
     }
 
@@ -78,7 +394,243 @@ class Analyzer {
       'executionQuery',
       { symbol: symName, print });
 
-    this.allResults.push(...rawResults);
+    const execs = [];
+    for (const row of rawResults) {
+      if (row.items) {
+        for (const item of row.items) {
+          if (item.pml) {
+            const grokked = grokPML(item.pml, 'executions');
+            let call;
+            let data = null;
+            if (grokked.queried) {
+              call = grokked.queried;
+              data = {};
+              for (let i = 0; i < printSources.length; i++) {
+                const printed = grokked.printed[i];
+                const name = printNames[i];
+                const source = printSources[i];
+
+                let sourceDict = data[source];
+                if (!sourceDict) {
+                  sourceDict = data[source] = {};
+                }
+                sourceDict[name] = printed;
+              }
+            } else {
+              call = grokked;
+            }
+            execs.push({
+              call,
+              data,
+              rawItem: item,
+            });
+          }
+        }
+      }
+    }
+
+    const traceResults = {
+      symName,
+      traceDef,
+      execs,
+    };
+    switch (traceDef.mode) {
+      case 'constructor':
+      case 'destructor': {
+        const classResults = this._getOrCreateClassResults(traceDef.classInfo);
+        if (traceDef.mode === 'constructor') {
+          classResults.constructorTraceResults = traceResults;
+        } else {
+          classResults.destructorTraceResults = traceResults;
+        }
+        break;
+      }
+
+      default: {
+        this.traceResultsMap.set(symName, traceResults);
+        break;
+      }
+    }
+
+    this.allQueryResults.push(...rawResults);
+  }
+
+  /**
+   * Process the `classResultsMap` to populate `semTypeToInstanceMap`, building
+   * up an understanding of all (future work: relevant) instances and their
+   * lifetimes.
+   */
+  _deriveInstances() {
+    function extractThisPtr(callInfo) {
+      if (!callInfo.args || callInfo.args.length < 1) {
+        return null;
+      }
+      const firstArg = callInfo.args[0];
+      if (!firstArg.ident || !firstArg.name || firstArg.name !== this) {
+        return null;
+      }
+      if (!firstArg.value || !firstArg.value.data) {
+        return null;
+      }
+      return firstArg.value.data;
+    }
+
+    for (const { classInfo, constructorTraceResults, destructorTraceResults } of
+         this.classResultsMap.values()) {
+      const semType = classInfo.semType || classInfo.name;
+
+      const instanceMap = new Map();
+      this.semTypeToInstanceMap.set(semType, instanceMap);
+
+      // NB: There may be a fundamental flaw related to class slicing that we
+      // will need to address.  (Or maybe pernosco does magic for us already?)
+      const getInstanceListForPtr = (pidPtr) => {
+        let list = instanceMap.get(pidPtr);
+        if (!list) {
+          list = [];
+          instanceMap.set(pidPtr, list);
+        }
+        return list;
+      }
+      // Find the largest construction moment preceding the provided moment.
+      //
+      // XXX Currently this is needlessly quadratic, but with expected small
+      // values of n which are additionally bounded by the limits in place that
+      // we haven't addressed.  (The pathological case would be an algorithm
+      // that constantly ends up reusing the exact same memory due to a tight
+      // new/delete loop.)
+      //
+      // This could absolutely be optimized via binary search or just stateful
+      // processing (ex: by cloning the map and the arrays and removing elements
+      // as they are paired off).
+      const findInstanceBestConstruction = (instList, moment) => {
+        let last = null;
+        for (const inst of instList) {
+          switch (cmpMoment(inst.constructionMoment, moment)) {
+            default:
+            case -1: {
+              last = inst;
+              break;
+            }
+            case 0:
+            case 1: {
+              return last;
+            }
+          }
+        }
+
+        return last;
+      }
+
+      // Process all the constructors first
+      for (const { symName, traceDef, execs } of constructorTraceResults) {
+        for (const exec of execs) {
+          const thisPtr = extractThisPtr(exec.call);
+          const thisPidPtr = makePidPtr(exec.call.meta.pid, thisPtr);
+          const instList = getInstanceListForPtr(thisPidPtr);
+
+          // This is inherently the right sequential ordering MODULO the fact
+          // that we use limits in our query requests so we could be only
+          // capturing a limited subset of the entire space.
+          instList.push({
+            // Create a per-semType object id by using the list index.  That is,
+            // this identifier is only unique for a given semType; the
+            // underlying memory could obviously have also been many other
+            // things.
+            semLocalObjId: `${thisPidPtr}:${instList.length}`,
+            // Dig out the ordering moments...
+            constructionMoment: exec.call.meta.entryMoment,
+            destructionMoment: null,
+            // But otherwise let's just hold onto the entire execInfo so we
+            // don't find ourselves wishing we had.
+            constructorExec: exec,
+            destructorExec: null,
+            // Identity extracted values
+            rawIdentity: {},
+            identityLinks: {},
+          });
+        }
+      }
+
+      // Process all the destructors next/last.
+      //
+      // Note that, as discussed above, our execution queries are currently
+      // bounded and so it's possible for us to see destructions that correspond
+      // to constructions we didn't see.
+      for (const { symName, traceDef, execs } of destructorTraceResults) {
+        for (const exec of execs) {
+          const thisPtr = extractThisPtr(exec.call);
+          const thisPidPtr = makePidPtr(exec.call.meta.pid, thisPtr);
+          const instList = getInstanceListForPtr(thisPidPtr);
+
+          const inst = findInstanceBestConstruction(
+            instList, exec.call.meta.entryMoment);
+
+          inst.destructionMoment = exec.call.meta.entryMoment;
+          inst.destructorExec = exec;
+
+          // Perform identity extractions here as well.
+          if (exec.data && exec.data.identity) {
+            for (const [name, printed] of Object.entries(exec.data.identity)) {
+              let rawVal = printed?.value?.data;
+              // Normalize pointers into PidPtrs.
+              // XXX The grok process can/should retain the type information
+              // here and or propagate it upwards into the classInfo so we
+              // aren't doing shoddy if reliable hacks here or requiring the
+              // config file to contain things that can be inferred.
+              let val;
+              if (rawVal && rawVal.startsWith('0x')) {
+                val = makePidPtr(exec.call.meta.pid, rawVal);
+              } else {
+                val = rawVal;
+              }
+              inst.rawIdentity[name] = val;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Process all instances, establishing identity links
+   */
+  _deriveHierarchies() {
+    for (const [semType, instanceMap] of this.semTypeToInstanceMap.entries()) {
+      const classInfo = this.config.semTypeToClassInfo.get(semType);
+      let linkTypesDefined = false;
+      for (const [pidPtr, instList] of instanceMap.entries()) {
+        for (const inst of instList) {
+          for (const [name, rawIdent] of Object.entries(inst.rawIdentity)) {
+            // See if this name corresponds to a semType; if so, we know we
+            // should be establishing a semType link instead of a concept link.
+            //
+            // XXX This process could be hoisted or further pre-computed; that
+            // is, linkTypesDefined would happen once here or in a prior stage
+            // which would allow this step to be rote application of the
+            // identityLinkTypes knowledge.
+            const identClassInfo = this.config.semTypeToClassInfo.get(name);
+            if (identClassInfo) {
+              const linkInst = this._getSemTypeInstance(
+                name, pidPtr, inst.destructionMoment);
+              inst.identityLinks[name] = linkInst;
+              if (!linkTypesDefined) {
+                classInfo.identityLinkTypes[name] = identClassInfo;
+              }
+            } else {
+              // It's a concept!
+              const conceptInst =
+                this._getOrCreateConceptInstance(name, rawIdent);
+              inst.identityLinks[name] = conceptInst;
+              if (!linkTypesDefined) {
+                classInfo.identityLinkTypes[name] = 'concept';
+              }
+            }
+          }
+          linkTypesDefined = true;
+        }
+      }
+    }
   }
 }
 
