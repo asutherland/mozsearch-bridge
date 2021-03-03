@@ -1,18 +1,20 @@
 namespace.prefix = "mozilla::dom::indexedDB::(anonymous namespace)::"
 
-##[trace."FullObjectStoreMetadata::FullObjectStoreMetadata"]
+[trace."FullObjectStoreMetadata::FullObjectStoreMetadata"]
 
-##[trace."FullDatabaseMetadata::Duplicate"]
+[trace."FullDatabaseMetadata::Duplicate"]
 
-##[trace."VersionChangeTransaction::RecvCreateObjectStore"]
+[trace."VersionChangeTransaction::RecvCreateObjectStore"]
 
 # Note that this one causes a grok failure due to the _vptr superclass nesting
 # that the grokker doesn't currently understand.
-##[trace."OpenDatabaseOp::LoadDatabaseInformation"]
+[trace."OpenDatabaseOp::LoadDatabaseInformation"]
 
-##[trace."OpenDatabaseOp::AssertMetadataConsistency"]
+[trace."OpenDatabaseOp::AssertMetadataConsistency"]
 
-##[trace."TransactionBase::CommitOp::WriteAutoIncrementCounts"]
+##? OpenDatabaseOp::BeginVersionChange
+
+[trace."TransactionBase::CommitOp::WriteAutoIncrementCounts"]
 
 [trace."TransactionBase::CommitOp::CommitOrRollbackAutoIncrementCounts"]
 

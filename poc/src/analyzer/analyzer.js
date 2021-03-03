@@ -1,4 +1,5 @@
 import parse from '@iarna/toml/parse-string';
+import bounds from 'binary-search-bounds';
 
 import { grokPML, grokPMLRows } from '../pmlgrok/grokker.js';
 
@@ -245,6 +246,9 @@ class Analyzer {
     this.client = null;
     this.allQueryResults = [];
 
+    this._allMoments = [];
+    this.momentToSeqId = new Map();
+
     // Map from symbol/method name to a TraceResult record; does not include
     // automatically generated class lifecycle traces which end up in
     // `classResults`.
@@ -343,6 +347,10 @@ class Analyzer {
       await this._doTrace(traceDef);
     }
 
+    // Establish the time mapping as early as possible so we can use it for
+    // debugging logging or similar.
+    this._establishTimeMapping();
+
     // ## Phase 2: Derive instances
     this._deriveInstances();
 
@@ -418,6 +426,8 @@ class Analyzer {
             } else {
               call = grokked;
             }
+            this._learnMoment(call.meta.entryMoment);
+            this._learnMoment(call.meta.returnMoment);
             execs.push({
               call,
               data,
@@ -502,7 +512,8 @@ class Analyzer {
       //
       // This could absolutely be optimized via binary search or just stateful
       // processing (ex: by cloning the map and the arrays and removing elements
-      // as they are paired off).
+      // as they are paired off). The "binary-search-bounds" module seems
+      // probably good for this.
       const findInstanceBestConstruction = (instList, moment) => {
         let last = null;
         for (const inst of instList) {
@@ -665,12 +676,116 @@ class Analyzer {
   }
 
   /**
+   * Establish a mapping from the moments observed in the trace onto a timeline
+   * with the singular goal of establishing a useful density of events on the
+   * timeline rather than having vast empty spaces between insanely dense
+   * clusters of events.  The latter is what a naive mapping on "event"
+   * establishes, which creates a bad UX as one must zoom way out only to zoom
+   * way back in.  (This can be partially addressed by simultaneously
+   * visualizing at both a global and local scale, but that doesn't actually
+   * make the global scale useful.)
+   *
+   * We are explicitly not attempting to establish a mapping consistent with the
+   * wall cock or with a global linearization over all instructions executed
+   * (which would be the most realistic timeline), but if it turns out pernosco
+   * provides a means of doing the latter, it would be useful to be able to
+   * visualize time gaps and optionally project events onto their instruction
+   * timeline.
+   *
+   * Disclaimer: All other analysis logic that is aware of time/sequences
+   * currently continues to use moments.
+   *
+   * ## Process
+   *
+   * Building the mapping:
+   * - All traced methods contribute their start and end moments to a list of
+   *   known moments.
+   *   - These are currently always extracted from the `call.meta.entryMoment`
+   *     and `call.meta.returnMoment` (if present, I think it's moot), noting
+   *     that these are actually extracted by the grokker from inside the
+   *     focusInfo.frame.entryMoment, so the object identities should be
+   *     equivalent there as well.
+   *   - We currently don't want won't use the anyMoment or dataMoment, although
+   *     they should usually be equivalent (but not the same object instance!).
+   * - We sort the list.
+   * - We assign sequential sequence id's to every moment which we call `SeqId`.
+   *   - We currently don't bother to check for exact sequence equivalence
+   *     because it seems like that shouldn't happen because different traces
+   *     for the the same stack will inherently have different instruction
+   *     positions.
+   *   - We currently use a step size of 2 rather than 1 so that we can have a
+   *     concept of a position between our known moments for pernosco moments
+   *     that aren't from our known set.
+   * - We build a big Map from the underlying moment objects to the sequence id
+   *   because this is very easy to do without using a library.
+   *
+   * Using the mapping:
+   * - We lookup any provided moment object in the Map.  This depends on object
+   *   identities being maintained AKA only asking for a mapping of moments that
+   *   were added in the prior step.
+   * - We do also provide `mapMomentToSeqId` which performs a binary search to
+   *   accomplish the mapping process.
+   *
+   * ## Context
+   *
+   * Pernosco's moments are defined as { event, instr } which seems to be a
+   * deterministic event counter paired with an instruction counter that resets
+   * whenever a new deterministic event occurs.
+   */
+  _establishTimeMapping() {
+    const allMoments = this._allMoments;
+    allMoments.sort(cmpMoment);
+
+    const momentToSeqId = this.momentToSeqId;
+
+    let seqId = 1;
+    let lastMoment = null;
+    for (let iMoment = 0; iMoment < allMoments.length; iMoment++) {
+      const moment = allMoments[iMoment];
+      momentToSeqId.set(moment, seqId);
+      // Handle equivalent moments by assigning them the same sequence and
+      // evicting them from the array.  (But we do want to have mapped them as
+      // we've just done.)
+      if (lastMoment && cmpMoment(lastMoment, moment) === 0) {
+        allMoments.splice(iMoment, 1);
+        // Don't accidentally skip a moment.
+        iMoment--;
+        continue;
+      }
+      lastMoment = moment;
+      seqId += 2;
+    }
+  }
+
+  _learnMoment(moment) {
+    if (moment) {
+      this._allMoments.push(moment);
+    }
+  }
+
+  mapMomentToSeqId(moment) {
+    const idxLE = bounds.le(this._allMoments, moment, cmpMoment);
+    if (idxLE === -1) {
+      return 0;
+    }
+    // If it's an exact match for the moment, return the sequence id
+    // corresponding exactly to the moment.
+    if (cmpMoment(this._allMoments[idxLE], moment) === 0) {
+      return idxLE * 2 + 1;
+    }
+    // Otherwise we want 1 more than that.
+    return idxLE * 2 + 2;
+  }
+
+  /**
    * Populate VisJS group and item datasets where trace directives translate
    * directly to items and identity links form the basis of groups.
    * We currently discard pid/tid auto-grouping but that is still quite
    * relevant.
    */
   renderIntoVisJs(groups, items) {
+    const momentToSeqId = this.momentToSeqId;
+
     // A map from semType to a Map from `semLocalObjId` to group.
     const semTypeGroupMaps = new Map();
     function deriveGroupForExec(exec) {
@@ -704,6 +819,9 @@ class Analyzer {
           }
         }
 
+        const startSeqId = momentToSeqId.get(exec.call.meta.entryMoment);
+        const endSeqId = exec.call.meta.returnMoment ? momentToSeqId.get(exec.call.meta.returnMoment) : startSeqId;
+
         let dataId = nextDataId++;
         items.add({
           id: dataId,
@@ -711,8 +829,9 @@ class Analyzer {
           group: 1,
           content,
           type: 'range',
-          start: exec.call.meta.entryMoment.event,
-          end: exec.call.meta.returnMoment ? exec.call.meta.returnMoment.event : exec.call.meta.entryMoment.event,
+          start: startSeqId,
+          end: endSeqId,
+          //end: ,
           extra: {
             focus: exec.call.meta.focusInfo,
           },

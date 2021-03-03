@@ -24,19 +24,8 @@ let client = new BridgeClient({
       const moment = statusReport.focus.moment;
       statusElem.textContent = `Event: ${moment.event} Instr: ${moment.instr}`;
 
-      if (gTimeline) {
-        // Set the marker for the current focus point.
-        gTimeline.setCustomTime(moment.event, "focus");
-
-        // Check whether the focus point is visible for the current visible time
-        // window and if not move the timeline so that it's centered.  We do
-        // this conditionally to avoid moving the timeline unless necessary;
-        // this is important because moving the timeline can impact layout and
-        // the user's understanding of what they're looking at.
-        const { start, end } = gTimeline.getWindow();
-        if (moment.event < start || moment.event > end) {
-          gTimeline.moveTo(moment.event);
-        }
+      if (gTimelineSeek) {
+        gTimelineSeek(moment);
       }
     }
   },
@@ -355,6 +344,7 @@ let gTimelineData;
 let gTimelineGroups;
 let gLastIngestedRows;
 let gTimeline;
+let gTimelineSeek;
 let gTimelineDataGen = 0;
 
 const EVENT_SCALE = 100;
@@ -430,6 +420,21 @@ function renderTimelineFromRows(rows, container) {
     }
   }
 
+  gTimelineSeek = (moment) => {
+    // Set the marker for the current focus point.
+    gTimeline.setCustomTime(moment.event, "focus");
+
+    // Check whether the focus point is visible for the current visible time
+    // window and if not move the timeline so that it's centered.  We do
+    // this conditionally to avoid moving the timeline unless necessary;
+    // this is important because moving the timeline can impact layout and
+    // the user's understanding of what they're looking at.
+    const { start, end } = gTimeline.getWindow();
+    if (moment.event < start || moment.event > end) {
+      gTimeline.moveTo(moment.event);
+    }
+  };
+
   renderTimeline(container);
 }
 
@@ -443,6 +448,23 @@ function renderTimelineFromAnalysis(analyzer, container) {
   gTimelineData.clear();
 
   analyzer.renderIntoVisJs(gTimelineGroups, gTimelineData);
+
+  gTimelineSeek = (moment) => {
+    const targetSeqId = analyzer.mapMomentToSeqId(moment);
+
+    // Set the marker for the current focus point.
+    gTimeline.setCustomTime(targetSeqId, "focus");
+
+    // Check whether the focus point is visible for the current visible time
+    // window and if not move the timeline so that it's centered.  We do
+    // this conditionally to avoid moving the timeline unless necessary;
+    // this is important because moving the timeline can impact layout and
+    // the user's understanding of what they're looking at.
+    const { start, end } = gTimeline.getWindow();
+    if (targetSeqId < start || targetSeqId > end) {
+      gTimeline.moveTo(targetSeqId);
+    }
+  };
 
   renderTimeline(container);
 }
@@ -458,12 +480,12 @@ function renderTimeline(container) {
     showCurrentTime: false,
     format: {
       minorLabels: function(date/*, scale/*, step*/) {
-        const relTicks = Math.floor(date * EVENT_SCALE / 1000000);
-        return `${relTicks} MTicks`;
+        const relTicks = date.valueOf(); //Math.floor(date / 100);
+        return `${relTicks} Seqs`;
       },
       majorLabels: function(date/*, scale/*, step*/) {
-        const relTicks = Math.floor(date * EVENT_SCALE / 1000000);
-        return `${relTicks} MTicks`;
+        const relTicks = Math.floor(date / 100);
+        return `${relTicks} CSeqs`;
       }
     }
   };
