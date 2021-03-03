@@ -359,7 +359,7 @@ let gTimelineDataGen = 0;
 
 const EVENT_SCALE = 100;
 
-function renderTimeline(rows, container) {
+function renderTimelineFromRows(rows, container) {
   // Only process this data if we haven't already processed it.  (We don't want
   // switching between rendering modes to keep adding duplicate data.)
   if (gLastIngestedRows !== rows) {
@@ -429,6 +429,26 @@ function renderTimeline(rows, container) {
       });
     }
   }
+
+  renderTimeline(container);
+}
+
+function renderTimelineFromAnalysis(analyzer, container) {
+  if (!gTimelineData) {
+    gTimelineGroups = new DataSet();
+    gTimelineData = new DataSet();
+  }
+
+  gTimelineGroups.clear();
+  gTimelineData.clear();
+
+  analyzer.renderIntoVisJs(gTimelineGroups, gTimelineData);
+
+  renderTimeline(container);
+}
+
+function renderTimeline(container) {
+  console.log('rendering timeline using groups', gTimelineGroups, 'data', gTimelineData);
 
   const options = {
     groupOrder: 'id',
@@ -512,7 +532,7 @@ function renderCurrentResults() {
     }
 
     case "timeline": {
-      renderTimeline(resultRows, into);
+      renderTimelineFromRows(resultRows, into);
     }
   }
 
@@ -753,7 +773,8 @@ async function runAnalyzer() {
     });
 
   if (eOutput.reqId === reqId) {
-    prettifyQueryResultsInto(results, eOutput, 'raw');
+    renderTimelineFromAnalysis(analyzer, eOutput);
+    //prettifyQueryResultsInto(results, eOutput, 'raw');
   }
 }
 

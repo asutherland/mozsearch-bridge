@@ -1,0 +1,63 @@
+namespace.prefix = "mozilla::dom::indexedDB::(anonymous namespace)::"
+
+##[trace."FullObjectStoreMetadata::FullObjectStoreMetadata"]
+
+##[trace."FullDatabaseMetadata::Duplicate"]
+
+##[trace."VersionChangeTransaction::RecvCreateObjectStore"]
+
+# Note that this one causes a grok failure due to the _vptr superclass nesting
+# that the grokker doesn't currently understand.
+##[trace."OpenDatabaseOp::LoadDatabaseInformation"]
+
+##[trace."OpenDatabaseOp::AssertMetadataConsistency"]
+
+##[trace."TransactionBase::CommitOp::WriteAutoIncrementCounts"]
+
+[trace."TransactionBase::CommitOp::CommitOrRollbackAutoIncrementCounts"]
+
+[trace."ObjectStoreAddOrPutRequestOp::DoDatabaseWork"]
+
+# The typeinfo section contains information that should be automatically
+# provided via asking searchfox or pernosco (possibly via gdb machinations) for
+# type hierarchy information.
+[typeinfo]
+
+[typeinfo."TransactionDatabaseOperationBase"]
+subclasses = [
+  "ObjectStoreAddOrPutRequestOp"
+]
+
+# ## Hierarchy / Grouping goals
+#
+# Eventually, we want to nest things by:
+# - origin
+# - database name
+# - transaction
+#
+# To start, we're just grouping by the transaction pointer.
+
+
+[class."Database"]
+semType = "database"
+lifecycle = true
+[class."Database".identity]
+origin.eval = "mOriginMetadata.mOrigin"
+dbName.eval = "mMetadata.mRawPtr->mCommonMetadata.name_"
+
+[class."TransactionBase"]
+semType = "transaction"
+lifecycle = true
+[class."TransactionBase".identity]
+database.eval = "mDatabase.mRawPtr"
+
+[class."TransactionDatabaseOperationBase"]
+[class."TransactionDatabaseOperationBase".identity]
+# Getting the origin via GDB:
+#   p ((OriginScope::Origin)mTransaction.mMaybe.mStorage.val.mBasePtr.mPtr.mRawPtr->mDatabase.mRawPtr->mDirectoryLock.mRawPtr->mOriginScope.mData)->mOrigin
+# That won't work in pernosco because pernosco can't handle the Variant.
+# (Noting that pernosco seems to automatically want to pierce mDirectoryLock's
+# mRawPtr; maybe it's not a SafeRefPtr)
+transaction.eval = "mTransaction.mMaybe.mStorage.val.mBasePtr.mPtr.mRawPtr"
+# We specifically want to group by the pointer value for now, and this implies
+# that the scope is a single process rather than some global id space.

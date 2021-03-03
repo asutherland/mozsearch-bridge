@@ -10,13 +10,13 @@ function shortSymbolName(name) {
 function deriveClassConstructor(name) {
   const parts = name.split('::');
   parts.push(parts[parts.length - 1]);
-  return parse.join('::');
+  return parts.join('::');
 }
 
 function deriveClassDestructor(name) {
   const parts = name.split('::');
   parts.push('~' + parts[parts.length - 1]);
-  return parse.join('::');
+  return parts.join('::');
 }
 
 // Assemble a PidPtr from a pid (process id) and pointer (hex string of a
@@ -137,7 +137,7 @@ class AnalyzerConfig {
    * from the fancy branch.)
    */
   _processTypeInfo(typeInfo) {
-    if (!typeinfo) {
+    if (!typeInfo) {
       return;
     }
 
@@ -354,15 +354,14 @@ class Analyzer {
   }
 
   async _doTrace(traceDef) {
-    const { symName } = traceDef;
-    const classInfo = this._lookupClassInfoFromSymbol(symName);
-    const usePrint = info.capture ||
+    const { symName, classInfo } = traceDef;
+    const usePrint = traceDef.capture ||
                      (classInfo && (classInfo.state || classInfo.identity));
     const printParts = usePrint ? [] : undefined;
     const printNames = usePrint ? [] : undefined;
     const printSources = usePrint ? [] : undefined;
 
-    if (info.capture) {
+    if (traceDef.capture) {
       for (const captureParam of info.capture) {
         printParts.push(captureParam);
         printNames.push(captureParam);
@@ -423,6 +422,7 @@ class Analyzer {
               call,
               data,
               rawItem: item,
+              identityLinks: {},
             });
           }
         }
@@ -523,7 +523,8 @@ class Analyzer {
       }
 
       // Process all the constructors first
-      for (const { symName, traceDef, execs } of constructorTraceResults) {
+      {
+        const { symName, traceDef, execs } = constructorTraceResults;
         for (const exec of execs) {
           const thisPtr = extractThisPtr(exec.call);
           const thisPidPtr = makePidPtr(exec.call.meta.pid, thisPtr);
@@ -557,7 +558,8 @@ class Analyzer {
       // Note that, as discussed above, our execution queries are currently
       // bounded and so it's possible for us to see destructions that correspond
       // to constructions we didn't see.
-      for (const { symName, traceDef, execs } of destructorTraceResults) {
+      {
+        const { symName, traceDef, execs } = destructorTraceResults;
         for (const exec of execs) {
           const thisPtr = extractThisPtr(exec.call);
           const thisPidPtr = makePidPtr(exec.call.meta.pid, thisPtr);
@@ -565,6 +567,10 @@ class Analyzer {
 
           const inst = findInstanceBestConstruction(
             instList, exec.call.meta.entryMoment);
+          // XXX ignore destructions for which we lack a construction for now...
+          if (!inst) {
+            continue;
+          }
 
           inst.destructionMoment = exec.call.meta.entryMoment;
           inst.destructorExec = exec;
@@ -593,7 +599,7 @@ class Analyzer {
   }
 
   /**
-   * Process all instances, establishing identity links
+   * Process all instances and semTypes, establishing identity links.
    */
   _deriveHierarchies() {
     for (const [semType, instanceMap] of this.semTypeToInstanceMap.entries()) {
@@ -612,7 +618,7 @@ class Analyzer {
             const identClassInfo = this.config.semTypeToClassInfo.get(name);
             if (identClassInfo) {
               const linkInst = this._getSemTypeInstance(
-                name, pidPtr, inst.destructionMoment);
+                name, rawIdent, inst.destructionMoment);
               inst.identityLinks[name] = linkInst;
               if (!linkTypesDefined) {
                 classInfo.identityLinkTypes[name] = identClassInfo;
@@ -629,6 +635,88 @@ class Analyzer {
           }
           linkTypesDefined = true;
         }
+      }
+    }
+
+    for (const { symName, traceDef, execs } of this.traceResultsMap.values()) {
+      const classInfo = traceDef.classInfo;
+      for (const exec of execs) {
+        // Process identity data for links.
+        if (exec.data?.identity) {
+          // XXX This logic is a mash-up from _deriveInstances and the above
+          // and might benefit from refactoring for reuse, also maybe not.
+          for (const [name, printed] of Object.entries(exec.data.identity)) {
+            let rawVal = printed?.value?.data;
+            let val;
+            if (rawVal && rawVal.startsWith('0x')) {
+              val = makePidPtr(exec.call.meta.pid, rawVal);
+            } else {
+              val = rawVal;
+            }
+            // XXX we're punting on the "concept" thing here; that likely wants
+            // to be normalized before handling it here.
+            const linkInst = this._getSemTypeInstance(
+              name, val, exec.call.meta.entryMoment);
+            exec.identityLinks[name] = linkInst;
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Populate VisJS group and item datasets where trace directives translate
+   * directly to items and identity links form the basis of groups.
+   * We currently discard pid/tid auto-grouping but that is still quite
+   * relevant.
+   */
+  renderIntoVisJs(groups, items) {
+    // A map from semType to a Map from `semLocalObjId` to group.
+    const semTypeGroupMaps = new Map();
+    function deriveGroupForExec(exec) {
+      for (const [name, linkInst] of Object.entries(exec.identityLinks)) {
+
+      }
+    }
+
+    groups.add({
+      id: 1,
+      content: 'only',
+      nestedGroups: [],
+    });
+
+    let nextDataId = 1;
+    for (const { symName, traceDef, execs } of this.traceResultsMap.values()) {
+      for (const exec of execs) {
+        let content = shortSymbolName(exec.call.func.name);
+        if (exec.data?.capture) {
+          for (const item of exec.data.capture) {
+            if (item.value && item.value.data) {
+              content += `<br>${item.name}: ${item.value.data}`;
+            }
+          }
+        }
+        if (exec.data?.classState) {
+          for (const item of exec.data.classState) {
+            if (item.value && item.value.data) {
+              content += `<br>${item.name}: ${item.value.data}`;
+            }
+          }
+        }
+
+        let dataId = nextDataId++;
+        items.add({
+          id: dataId,
+          //group: tid,
+          group: 1,
+          content,
+          type: 'range',
+          start: exec.call.meta.entryMoment.event,
+          end: exec.call.meta.returnMoment ? exec.call.meta.returnMoment.event : exec.call.meta.entryMoment.event,
+          extra: {
+            focus: exec.call.meta.focusInfo,
+          },
+        });
       }
     }
   }
