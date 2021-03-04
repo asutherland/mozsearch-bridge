@@ -314,22 +314,13 @@ class Analyzer {
       return null;
     }
 
-    let last = null;
-    for (const inst of instList) {
-      switch (cmpMoment(inst.constructionMoment, moment)) {
-        default:
-        case -1: {
-          last = inst;
-          break;
-        }
-        case 0:
-        case 1: {
-          return last;
-        }
-      }
+    const idxLE = bounds.le(
+      instList, moment,
+      (a, _moment) => cmpMoment(a.constructionMoment, _moment));
+    if (idxLE === -1) {
+      return null;
     }
-
-    return last;
+    return instList[idxLE];
   }
 
   async analyze(client, progressCallback) {
@@ -503,34 +494,14 @@ class Analyzer {
         return list;
       }
       // Find the largest construction moment preceding the provided moment.
-      //
-      // XXX Currently this is needlessly quadratic, but with expected small
-      // values of n which are additionally bounded by the limits in place that
-      // we haven't addressed.  (The pathological case would be an algorithm
-      // that constantly ends up reusing the exact same memory due to a tight
-      // new/delete loop.)
-      //
-      // This could absolutely be optimized via binary search or just stateful
-      // processing (ex: by cloning the map and the arrays and removing elements
-      // as they are paired off). The "binary-search-bounds" module seems
-      // probably good for this.
       const findInstanceBestConstruction = (instList, moment) => {
-        let last = null;
-        for (const inst of instList) {
-          switch (cmpMoment(inst.constructionMoment, moment)) {
-            default:
-            case -1: {
-              last = inst;
-              break;
-            }
-            case 0:
-            case 1: {
-              return last;
-            }
-          }
+        const idxLE = bounds.le(
+          instList, moment,
+          (a, _moment) => cmpMoment(a.constructionMoment, _moment));
+        if (idxLE === -1) {
+          return null;
         }
-
-        return last;
+        return instList[idxLE];
       }
 
       // Process all the constructors first
