@@ -63,3 +63,9 @@ database.eval = "mDatabase.mRawPtr"
 transaction.eval = "mTransaction.mMaybe.mStorage.val.mBasePtr.mPtr.mRawPtr"
 # We specifically want to group by the pointer value for now, and this implies
 # that the scope is a single process rather than some global id space.
+
+[class."TransactionBase::CommitOp".identity]
+transaction.eval = "mTransaction.mRawPtr"
+
+[class."OpenDatabaseOp".identity]
+transaction.eval = "mVersionChangeTransaction.mRawPtr"

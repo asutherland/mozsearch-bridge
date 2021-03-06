@@ -448,6 +448,7 @@ function renderTimelineFromAnalysis(analyzer, container) {
   gTimelineData.clear();
 
   analyzer.renderIntoVisJs(gTimelineGroups, gTimelineData);
+  console.log('used analyzer', analyzer);
 
   gTimelineSeek = (moment) => {
     const targetSeqId = analyzer.mapMomentToSeqId(moment);
@@ -788,6 +789,7 @@ async function runAnalyzer() {
   const analyzer = await loadAnalyzer('toml-configs/idb.toml');
   // The results are currently just the aggregation of all the underlying
   // queries.
+  console.log('using analyzer', analyzer);
   const results = await analyzer.analyze(
     client,
     (state, details) => {

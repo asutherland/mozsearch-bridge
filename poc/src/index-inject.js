@@ -336,6 +336,10 @@ class POCServer extends BridgeServer {
       const afterResults = await afterHandler.promise;
       afterQueryId = null;
 
+      // The before results end up being provided in descending order which is
+      // annoying for our purposes, so reverse them.
+      beforeResults.reverse();
+
       const results = [...beforeResults, ...afterResults];
 
       reply(results);

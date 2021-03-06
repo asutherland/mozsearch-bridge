@@ -112,6 +112,8 @@ class AnalyzerConfig {
       subclasses: new Set(),
       // Immediate superclasses, currently inferred from "subclasses".
       superclasses: new Set(),
+      // XXX need to implement the formerly conceived of "state" mapping
+      stateDefs: [],
       identityDefs: [],
       // This is populated by Analyzer._deriveHierarchies
       identityLinkTypes: {},
@@ -290,7 +292,9 @@ class Analyzer {
     let conceptInst = conceptInstMap.get(value);
     if (!conceptInst) {
       conceptInst = {
+        semLocalObjId: value,
         name: value,
+        isConcept: true,
       };
       conceptInstMap.set(value, conceptInst);
     }
@@ -354,8 +358,32 @@ class Analyzer {
 
   async _doTrace(traceDef) {
     const { symName, classInfo } = traceDef;
-    const usePrint = traceDef.capture ||
-                     (classInfo && (classInfo.state || classInfo.identity));
+
+    let stateDefs = null;
+    let identityDefs = null;
+    function walkClassInfo(ci) {
+      if (!ci) {
+        return;
+      }
+      if (ci.stateDefs.length) {
+        if (!stateDefs) {
+          stateDefs = [];
+        }
+        stateDefs.push(...ci.stateDefs);
+      }
+      if (ci.identityDefs.length) {
+        if (!identityDefs) {
+          identityDefs = [];
+        }
+        identityDefs.push(...ci.identityDefs);
+      }
+      for (const superclass of ci.superclasses) {
+        walkClassInfo(superclass);
+      }
+    }
+    walkClassInfo(classInfo);
+
+    const usePrint = traceDef.capture || stateDefs || identityDefs;
     const printParts = usePrint ? [] : undefined;
     const printNames = usePrint ? [] : undefined;
     const printSources = usePrint ? [] : undefined;
@@ -367,20 +395,20 @@ class Analyzer {
         printSources.push('capture');
       }
     }
-    if (classInfo && classInfo.state) {
-      for (const stateParam of classInfo.state) {
-        printParts.push(`this->${stateParam}`);
-        printNames.push(stateParam);
+    if (stateDefs) {
+      for (const def of stateDefs) {
+        printParts.push(`this->${def.eval}`);
+        printNames.push(def.name);
         printSources.push('classState');
       }
     }
     // If this is a class that has its lifecycle tracked, then there's no need
     // to extract the identity on anything but the destructor.
-    if (classInfo && classInfo.identity &&
+    if (identityDefs &&
         (!classInfo.trackLifecycle || traceDef.mode === 'destructor')) {
-      for (const [name, print] of Object.entries(classInfo.identity)) {
-        printParts.push(print);
-        printNames.push(name);
+      for (const def of identityDefs) {
+        printParts.push(def.eval);
+        printNames.push(def.name);
         printSources.push('identity');
       }
     }
@@ -467,10 +495,10 @@ class Analyzer {
         return null;
       }
       const firstArg = callInfo.args[0];
-      if (!firstArg.ident || !firstArg.name || firstArg.name !== this) {
+      if (firstArg?.ident?.name !== "this") {
         return null;
       }
-      if (!firstArg.value || !firstArg.value.data) {
+      if (!firstArg?.value?.data) {
         return null;
       }
       return firstArg.value.data;
@@ -749,44 +777,115 @@ class Analyzer {
   }
 
   /**
-   * Populate VisJS group and item datasets where trace directives translate
-   * directly to items and identity links form the basis of groups.
-   * We currently discard pid/tid auto-grouping but that is still quite
-   * relevant.
+   * Populate VisJS group and item datasets.
+   *
+   * The current approach for grouping is:
+   * - Create a group for each traced method on a per-TID basis.  We do this
+   *   so that the group can hold the method label and we can
    */
   renderIntoVisJs(groups, items) {
     const momentToSeqId = this.momentToSeqId;
 
+    let nextGroupId = 1;
+
     // A map from semType to a Map from `semLocalObjId` to group.
     const semTypeGroupMaps = new Map();
-    function deriveGroupForExec(exec) {
-      for (const [name, linkInst] of Object.entries(exec.identityLinks)) {
-
+    function semGroupGetOrCreateForInstance(semType, inst) {
+      let groupMap = semTypeGroupMaps.get(semType);
+      if (!groupMap) {
+        groupMap = new Map();
+        semTypeGroupMaps.set(semType, groupMap);
       }
+
+      let group = groupMap.get(inst.semLocalObjId);
+      if (!group) {
+        let groupId = nextGroupId++;
+        let parentGroupId = null;
+        let treeLevel = 1;
+        let content = `<b>${semType}: ${inst.semLocalObjId}</b>`;
+
+        // For now, only the first identityLink is used to be our group parent
+        // and the rest gets stuck in the group content.
+        if (inst.identityLinks) {
+          let foundParent = false;
+          for (const [name, linkInst] of Object.entries(inst.identityLinks)) {
+            if (!foundParent) {
+              const parentGroup = semGroupGetOrCreateForInstance(name, linkInst);
+              parentGroup.nestedGroups.push(groupId);
+              parentGroupId = parentGroup.id;
+              treeLevel = parentGroup.treeLevel + 1;
+              foundParent = true;
+            } else {
+              content += `<br>${name}: ${linkInst.semLocalObjId}`;
+            }
+          }
+        }
+
+        group = {
+          id: groupId,
+          content,
+          nestedGroups: [],
+          treeLevel,
+          parentGroupId,
+        };
+        groupMap.set(inst.semLocalObjId, group);
+        groups.add(group);
+      }
+      return group;
     }
 
-    groups.add({
-      id: 1,
-      content: 'only',
-      nestedGroups: [],
-    });
+    //
+    const methodTrackMap = new Map();
 
     let nextDataId = 1;
     for (const { symName, traceDef, execs } of this.traceResultsMap.values()) {
+      let methodName = shortSymbolName(symName);
       for (const exec of execs) {
-        let content = shortSymbolName(exec.call.func.name);
+        let contentPieces = [];
         if (exec.data?.capture) {
           for (const item of exec.data.capture) {
             if (item.value && item.value.data) {
-              content += `<br>${item.name}: ${item.value.data}`;
+              contentPieces.push(`${item.name}: ${item.value.data}`);
             }
           }
         }
         if (exec.data?.classState) {
           for (const item of exec.data.classState) {
             if (item.value && item.value.data) {
-              content += `<br>${item.name}: ${item.value.data}`;
+              contentPieces.push(`${item.name}: ${item.value.data}`);
             }
+          }
+        }
+
+        let identityGroup = null;
+        for (const [name, linkInst] of Object.entries(exec.identityLinks)) {
+          if (!identityGroup && linkInst) {
+            identityGroup = semGroupGetOrCreateForInstance(name, linkInst);
+          } else if (linkInst) {
+            // Actually this maybe wants to induce additional tupling?
+            contentPieces.push(`${name}: ${linkInst.semLocalObjId}`);
+          }
+        }
+
+        // Create the dedicated swimlane group for the method for the thread
+        let trackUniqueId;
+        if (identityGroup) {
+          trackUniqueId = `${identityGroup.id}-${methodName}-${exec.call.meta.tid}`;
+        } else {
+          trackUniqueId = `ROOT-${methodName}-${exec.call.meta.tid}`;
+        }
+        let trackGroup = methodTrackMap.get(trackUniqueId);
+        if (!trackGroup) {
+          trackGroup = {
+            id: nextGroupId++,
+            content: `${methodName} : ${exec.call.meta.tid}`,
+            treeLevel: identityGroup ? identityGroup.treeLevel + 1 : 0,
+            parentGroupId: identityGroup ? identityGroup.id : null,
+          };
+          methodTrackMap.set(trackUniqueId, trackGroup);
+          groups.add(trackGroup);
+          if (identityGroup) {
+            identityGroup.nestedGroups.push(trackGroup);
           }
         }
 
@@ -796,19 +895,20 @@ class Analyzer {
         let dataId = nextDataId++;
         items.add({
           id: dataId,
-          //group: tid,
-          group: 1,
-          content,
+          group: trackGroup.id,
+          content: contentPieces.join('<br>'),
           type: 'range',
           start: startSeqId,
           end: endSeqId,
-          //end: ,
           extra: {
             focus: exec.call.meta.focusInfo,
           },
         });
       }
     }
+
+    // XXX it seems like we may need to reorder the groups to get the hierarchy
+    // to show up correctly?
   }
 }
 
