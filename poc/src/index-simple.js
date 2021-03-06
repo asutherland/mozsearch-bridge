@@ -479,6 +479,8 @@ function renderTimeline(container) {
     zoomMax: 1 * 1000 * 1000,
     zoomFriction: 40,
     showCurrentTime: false,
+    // XXX first priority is to get the nested groups properly parented.
+    groupOrder: 'content',
     format: {
       minorLabels: function(date/*, scale/*, step*/) {
         const relTicks = date.valueOf(); //Math.floor(date / 100);

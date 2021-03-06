@@ -885,7 +885,7 @@ class Analyzer {
           methodTrackMap.set(trackUniqueId, trackGroup);
           groups.add(trackGroup);
           if (identityGroup) {
-            identityGroup.nestedGroups.push(trackGroup);
+            identityGroup.nestedGroups.push(trackGroup.id);
           }
         }
 
