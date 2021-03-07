@@ -54,6 +54,7 @@ h1, h2, h3, h4, h5 {
 }
 
 #output-content {
+  background-color: white;
 }
 
 .pd {
@@ -174,6 +175,18 @@ h1, h2, h3, h4, h5 {
 
 .vis-item .vis-item-overflow {
   overflow: visible !important;
+}
+
+.vis-item.vis-background.instance-known-lifeline {
+  background-color: #cfc;
+}
+
+.vis-item.vis-background.instance-unknown-lifeline {
+  background-color: #ffc;
+}
+
+.vis-inner {
+  max-width: 45em;
 }
 
 /*

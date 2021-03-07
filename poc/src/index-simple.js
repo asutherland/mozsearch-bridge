@@ -435,7 +435,7 @@ function renderTimelineFromRows(rows, container) {
     }
   };
 
-  renderTimeline(container);
+  renderTimeline(container, true, 'container');
 }
 
 function renderTimelineFromAnalysis(analyzer, container) {
@@ -467,20 +467,27 @@ function renderTimelineFromAnalysis(analyzer, container) {
     }
   };
 
-  renderTimeline(container);
+  renderTimeline(
+    container, false, (groupA, groupB) => {
+      return (groupA.earliestSeqId || 0) - (groupB.earliestSeqId || 0);
+    });
 }
 
-function renderTimeline(container) {
+function renderTimeline(container, doStack=true, groupOrder) {
   console.log('rendering timeline using groups', gTimelineGroups, 'data', gTimelineData);
 
   const options = {
-    groupOrder: 'id',
+    configure: true,
+    clickToUse: true,
     zoomMin: 10,
     zoomMax: 1 * 1000 * 1000,
     zoomFriction: 40,
     showCurrentTime: false,
-    // XXX first priority is to get the nested groups properly parented.
-    groupOrder: 'content',
+    // TODO: Probably figure out a general gameplan for these.
+    groupOrder,
+    // The analyzer would ideally like to be able to control stacking at the
+    // group level, but `subgroupStack` is just for subgroups... I think.
+    stack: doStack,
     format: {
       minorLabels: function(date/*, scale/*, step*/) {
         const relTicks = date.valueOf(); //Math.floor(date / 100);

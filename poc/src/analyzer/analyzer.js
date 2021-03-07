@@ -250,6 +250,7 @@ class Analyzer {
 
     this._allMoments = [];
     this.momentToSeqId = new Map();
+    this.lastSeqId = 0;
 
     // Map from symbol/method name to a TraceResult record; does not include
     // automatically generated class lifecycle traces which end up in
@@ -754,6 +755,8 @@ class Analyzer {
       lastMoment = moment;
       seqId += 2;
     }
+
+    this.lastSeqId = seqId;
   }
 
   _learnMoment(moment) {
@@ -787,10 +790,11 @@ class Analyzer {
     const momentToSeqId = this.momentToSeqId;
 
     let nextGroupId = 1;
+    let nextDataId = 1;
 
     // A map from semType to a Map from `semLocalObjId` to group.
     const semTypeGroupMaps = new Map();
-    function semGroupGetOrCreateForInstance(semType, inst) {
+    const semGroupGetOrCreateForInstance = (semType, inst, startSeqId) => {
       let groupMap = semTypeGroupMaps.get(semType);
       if (!groupMap) {
         groupMap = new Map();
@@ -810,7 +814,7 @@ class Analyzer {
           let foundParent = false;
           for (const [name, linkInst] of Object.entries(inst.identityLinks)) {
             if (!foundParent) {
-              const parentGroup = semGroupGetOrCreateForInstance(name, linkInst);
+              const parentGroup = semGroupGetOrCreateForInstance(name, linkInst, startSeqId);
               parentGroup.nestedGroups.push(groupId);
               parentGroupId = parentGroup.id;
               treeLevel = parentGroup.treeLevel + 1;
@@ -827,20 +831,51 @@ class Analyzer {
           nestedGroups: [],
           treeLevel,
           parentGroupId,
+          earliestSeqId: startSeqId,
         };
         groupMap.set(inst.semLocalObjId, group);
         groups.add(group);
+
+        // If this is an instance with a lifetime (AKA non-concept), we want a
+        // background item to express the lifeline of the instance.
+        if (inst.constructionMoment) {
+          const startSeqId = momentToSeqId.get(inst.constructionMoment) || 0;
+          // If there's no end, just use 1 more than the sequence so it has some
+          // duration.  This also kind/sorta works with our "between" space that
+          // we build into the sequence space.  If this ends up weird it might
+          // work to have the sequence gap be 2 instead of 1 (and placing the
+          // between step at +2).
+          const endSeqId = inst.destructionMoment ?
+                            (momentToSeqId.get(inst.destructionMoment) || startSeqId) :
+                            this.lastSeqId;
+
+          items.add({
+            id: nextDataId++,
+            group: groupId,
+            className: inst.destructionMoment ? 'instance-known-lifeline' : 'instance-unknown-lifeline',
+            start: startSeqId,
+            end: endSeqId,
+            type: 'background',
+          });
+        }
+      } else {
+        if (startSeqId < group.earliestSeqId) {
+          group.earliestSeqId = startSeqId;
+        }
       }
       return group;
     }
 
-    //
+    // We assign each method to its own group so that all the calls to a single
+    // method can end up in a single track/swim-lane *under its parent group*.
+    // This gets keyed by "{parent group id or ROOT}-{method name}-{thread id}".
     const methodTrackMap = new Map();
-
-    let nextDataId = 1;
+    
     for (const { symName, traceDef, execs } of this.traceResultsMap.values()) {
       let methodName = shortSymbolName(symName);
       for (const exec of execs) {
+        const startSeqId = momentToSeqId.get(exec.call.meta.entryMoment);
+
         let contentPieces = [];
         if (exec.data?.capture) {
           for (const item of exec.data.capture) {
@@ -860,7 +895,7 @@ class Analyzer {
         let identityGroup = null;
         for (const [name, linkInst] of Object.entries(exec.identityLinks)) {
           if (!identityGroup && linkInst) {
-            identityGroup = semGroupGetOrCreateForInstance(name, linkInst);
+            identityGroup = semGroupGetOrCreateForInstance(name, linkInst, startSeqId);
           } else if (linkInst) {
             // Actually this maybe wants to induce additional tupling?
             contentPieces.push(`${name}: ${linkInst.semLocalObjId}`);
@@ -878,26 +913,42 @@ class Analyzer {
         if (!trackGroup) {
           trackGroup = {
             id: nextGroupId++,
+            // Note: Ideally we could use `subgroupStack` to control stacking of
+            // items in this group... but this doesn't work, so we're now having
+            // the top-level options "stack" be set to false.
             content: `${methodName} : ${exec.call.meta.tid}`,
             treeLevel: identityGroup ? identityGroup.treeLevel + 1 : 0,
             parentGroupId: identityGroup ? identityGroup.id : null,
+            earliestSeqId: startSeqId,
           };
           methodTrackMap.set(trackUniqueId, trackGroup);
           groups.add(trackGroup);
           if (identityGroup) {
             identityGroup.nestedGroups.push(trackGroup.id);
           }
+        } else {
+          if (startSeqId < trackGroup.earliestSeqId) {
+            trackGroup.earliestSeqId = startSeqId;
+          }
         }
 
-        const startSeqId = momentToSeqId.get(exec.call.meta.entryMoment);
-        const endSeqId = exec.call.meta.returnMoment ? momentToSeqId.get(exec.call.meta.returnMoment) : startSeqId;
+        
+        // If there's no end, just use 1 more than the sequence so it has some
+        // duration.  This also kind/sorta works with our "between" space that
+        // we build into the sequence space.  If this ends up weird it might
+        // work to have the sequence gap be 2 instead of 1 (and placing the
+        // between step at +2).
+        const endSeqId = exec.call.meta.returnMoment ? momentToSeqId.get(exec.call.meta.returnMoment) : (startSeqId + 1);
 
         let dataId = nextDataId++;
         items.add({
           id: dataId,
           group: trackGroup.id,
           content: contentPieces.join('<br>'),
-          type: 'range',
+          // For layout purposes the point doesn't avoid stacking and in fact
+          // ends up misleadingly larger than many ranges with our normal time
+          // mapping, so we use a range even for a same-sequence id situation.
+          type: (startSeqId !== endSeqId) ? 'range' : 'range',
           start: startSeqId,
           end: endSeqId,
           extra: {
