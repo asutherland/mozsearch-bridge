@@ -90,6 +90,10 @@ class AnalyzerConfig {
    * namespace usage via hardcoding that could be overridden.
    */
   normalizeSymName(rawName) {
+    // Don't normalize absolute namespaces.
+    if (rawName.startsWith('mozilla::')) {
+      return rawName;
+    }
     return this.nsPrefix + rawName;
   }
 
@@ -419,7 +423,7 @@ class Analyzer {
     // This will be an array of items of the form { items: [ { focus, pml }]}
     const rawResults = await this.client.sendMessageAwaitingReply(
       'executionQuery',
-      { symbol: symName, print });
+      { symbol: symName, print, limit: 222 });
 
     const execs = [];
     for (const row of rawResults) {
@@ -632,7 +636,11 @@ class Analyzer {
                 name, rawIdent, inst.destructionMoment);
               inst.identityLinks[name] = linkInst;
               if (!linkTypesDefined) {
-                classInfo.identityLinkTypes[name] = identClassInfo;
+                if (classInfo) {
+                  classInfo.identityLinkTypes[name] = identClassInfo;
+                } else {
+                  console.warn('weird classInfo for semType', semType, ':', classInfo);
+                }
               }
             } else {
               // It's a concept!

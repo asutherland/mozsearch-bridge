@@ -320,11 +320,11 @@ class POCServer extends BridgeServer {
     }
   }
 
-  async onMsg_executionQuery({ symbol, print }, reply) {
+  async onMsg_executionQuery({ symbol, print, limit }, reply) {
     console.log('poc: processing execution query for', symbol);
     let beforeQueryId, afterQueryId;
     try {
-      const [beforeReq, afterReq] = buildExecutionQuery({ symbol, print });
+      const [beforeReq, afterReq] = buildExecutionQuery({ symbol, print }, limit || 50);
       const beforeHandler = new BatchHandler();
       beforeQueryId = this._openQuery('execution', beforeReq, beforeHandler);
 

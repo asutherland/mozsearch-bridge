@@ -1,8 +1,8 @@
 namespace.prefix = "mozilla::dom::indexedDB::(anonymous namespace)::"
 
-[trace."FullObjectStoreMetadata::FullObjectStoreMetadata"]
+#[trace."FullObjectStoreMetadata::FullObjectStoreMetadata"]
 
-[trace."FullDatabaseMetadata::Duplicate"]
+#[trace."FullDatabaseMetadata::Duplicate"]
 
 [trace."VersionChangeTransaction::RecvCreateObjectStore"]
 
@@ -19,6 +19,9 @@ namespace.prefix = "mozilla::dom::indexedDB::(anonymous namespace)::"
 [trace."TransactionBase::CommitOp::CommitOrRollbackAutoIncrementCounts"]
 
 [trace."ObjectStoreAddOrPutRequestOp::DoDatabaseWork"]
+
+[trace."mozilla::dom::IDBTransaction::OnNewRequest"]
+[trace."mozilla::dom::IDBTransaction::OnRequestFinished"]
 
 # The typeinfo section contains information that should be automatically
 # provided via asking searchfox or pernosco (possibly via gdb machinations) for
@@ -69,3 +72,10 @@ transaction.eval = "mTransaction.mRawPtr"
 
 [class."OpenDatabaseOp".identity]
 transaction.eval = "mVersionChangeTransaction.mRawPtr"
+
+[class."mozilla::dom::IDBRequest"]
+semType = "request"
+lifecycle = true
+
+[class."mozilla::dom::IDBRequest".identity]
+transaction.eval = "mTransaction.mRawPtr"

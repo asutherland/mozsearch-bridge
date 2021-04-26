@@ -43,6 +43,7 @@
 class GrokContext {
   constructor() {
     this.verbose = false;
+    this.stack = [];
   }
 
   isIdent(pml) {
@@ -145,7 +146,7 @@ class GrokContext {
       return null;
     }
     if (pml.c.length !== 1 || typeof(pml.c[0]) !== "string") {
-      console.warn("Expected sole string", pml);
+      this.warn("Expected sole string", pml);
     }
     return pml.c[0];
   }
@@ -161,7 +162,7 @@ class GrokContext {
       } else if (typeof(kid) === "object" && kid.c) {
         return this.getFlattenedString(kid);
       } else {
-        console.warn("Problem flattening string node", kid, "in", pml);
+        this.warn("Problem flattening string node", kid, "in", pml);
         return "";
       }
     });
@@ -183,11 +184,25 @@ class GrokContext {
   }
 
   runGrokkerOnNode(grokker, node) {
+    this.stack.push({ grokker, node });
     const result = grokker(node, this);
     if (this.verbose) {
-      console.log("Got", result, "from grokker", grokker, "on", node);
+      this.log("Got", result, "from grokker", grokker, "on", node);
     }
+    this.stack.pop();
     return result;
+  }
+
+  log(...args) {
+    console.log(...args);
+  }
+
+  error(...args) {
+    console.error(...args, 'contextStack: ', this.stack);
+  }
+
+  warn(...args) {
+    console.warn(...args, 'contextStack: ', this.stack);
   }
 
   /**
@@ -212,7 +227,7 @@ class GrokContext {
       expectingHandlerDelim = false;
     };
     if (this.verbose) {
-      console.log("parsifying node", pml);
+      this.log("parsifying node", pml);
     }
     for (let node of pml.c) {
       let handler = allHandlers[iHandler];
@@ -221,7 +236,7 @@ class GrokContext {
         nextHandler = allHandlers[iHandler + 1];
       }
       if (this.verbose) {
-        console.log("considering", typeof(node), node, "with", handler, "and next", nextHandler);
+        this.log("considering", typeof(node), node, "with", handler, "and next", nextHandler);
       }
       // ## Is this PML node a string?
       if (typeof(node) === "string") {
@@ -242,7 +257,7 @@ class GrokContext {
         if (nextHandler && nextHandler === node) {
           // Assert that the current handler was capable of repetition.
           if (!handler.repeatDelim) {
-            console.warn(
+            this.warn(
               "Current handler", handler, "didn't have repeatDelim but we saw",
               "and are consuming the next node.", allHandlers);
           }
@@ -263,7 +278,7 @@ class GrokContext {
           }
         }
 
-        console.error(
+        this.error(
           `Found unexpected delimiter ${node} for`, iHandler, 'in',
           allHandlers, `(was expecting?: ${expectingHandlerDelim})`, pml);
         break;
@@ -271,7 +286,7 @@ class GrokContext {
 
       // ## It's something fancier!
       if (expectingHandlerDelim) {
-        console.warn(
+        this.warn(
           "Was expecting some kind of delimiter but got", node, "in",
           allHandlers);
         break;
@@ -664,15 +679,26 @@ function grokFunctionArgName(pml, ctx) {
   }
 
   // This is the array-subscripted situation.
-  if (ctx.isArraySubscripting(pml) && ctx.hasPairDelim(pml.c[0], "@")) {
-    const wrapped = pml.c[0];
-    let ident = ctx.runGrokkerOnNode(grokCompoundIdent, wrapped.c[0]);
-    ident.subscript = pml.c[1];
-    return {
-      // This could be a simple ident or ?maybe? a compound ident
-      ident,
-      value: ctx.runGrokkerOnNode(grokValue, wrapped.c[2]),
-    };
+  if (ctx.isArraySubscripting(pml)) {
+    if (ctx.hasPairDelim(pml.c[0], "@")) {
+      const wrapped = pml.c[0];
+      let ident = ctx.runGrokkerOnNode(grokCompoundIdent, wrapped.c[0]);
+      ident.subscript = pml.c[1];
+      return {
+        // This could be a simple ident or ?maybe? a compound ident
+        ident,
+        value: ctx.runGrokkerOnNode(grokValue, wrapped.c[2]),
+      };
+    }
+    if (ctx.isIdent(pml.c[0])) {
+      let ident = ctx.runGrokkerOnNode(grokCompoundIdent, pml.c[0]);
+      ident.subscript = pml.c[1];
+      return {
+        // This could be a simple ident or ?maybe? a compound ident
+        ident,
+        value: undefined,
+      };
+    }
   }
 
   console.warn("Unknown function argument name format", pml);

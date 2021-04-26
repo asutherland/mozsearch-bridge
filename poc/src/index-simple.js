@@ -477,7 +477,9 @@ function renderTimeline(container, doStack=true, groupOrder) {
   console.log('rendering timeline using groups', gTimelineGroups, 'data', gTimelineData);
 
   const options = {
-    configure: true,
+    // configure produces an interesting configuration UI after the timeline,
+    // but it didn't seem immediately useful.
+    //configure: true,
     clickToUse: true,
     zoomMin: 10,
     zoomMax: 1 * 1000 * 1000,
