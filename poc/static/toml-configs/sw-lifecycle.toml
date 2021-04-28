@@ -2,20 +2,20 @@
 
 [trace."mozilla::dom::ServiceWorkerUpdateJob::ComparisonResult"]
 capture=[
-  ["Status"],
-  ["aInCacheAndEqual"],
+  "Status",
+  "aInCacheAndEqual",
 ]
 
 [trace."mozilla::dom::serviceWorkerScriptCache::PurgeCache"]
 capture=[
-  ["aPrincipal->mURI.mRawPtr->mSpec"]
+  "aPrincipal->mURI.mRawPtr->mSpec"
 ]
 
 [trace."mozilla::dom::ServiceWorkerRegistrar::RegisterServiceWorker"]
 
 [trace."mozilla::dom::RemoteWorkerController::ExecServiceWorkerOp"]
 capture=[
-  ["aArgs->mType"]
+  "aArgs->mType"
 ]
 
 [disabled."mozilla::net::InterceptedHttpChannel::AsyncOpen"]
@@ -24,12 +24,12 @@ capture=[
 
 [class."mozilla::net::InterceptedHttpChannel"]
 state=[
-  ["mURI.mRawPtr->mSpec"]
+  "mURI.mRawPtr->mSpec"
 ]
 
 [trace."mozilla::dom::workerinternals::LoadMainScript"]
 capture=[
-  ["aScriptURL"]
+  "aScriptURL"
 ]
 
 [trace."mozilla::dom::FetchEventOp::Exec"]

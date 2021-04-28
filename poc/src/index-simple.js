@@ -797,7 +797,10 @@ async function runAnalyzer() {
 
   eStatus.textContent = '';
 
-  const analyzer = await loadAnalyzer('toml-configs/idb.toml');
+  const analyzer = await loadAnalyzer([
+    //'toml-configs/sw-lifecycle.toml',
+    'toml-configs/document-channel.toml'
+  ]);
   // The results are currently just the aggregation of all the underlying
   // queries.
   console.log('using analyzer', analyzer);

@@ -1,0 +1,23 @@
+namespace.prefix = "mozilla::net::"
+
+[class."ParentChannelListener"]
+
+[class."DocumentLoadListener"]
+semType = "loadListener"
+lifecycle = true
+[class."DocumentLoadListener".identity]
+creationURI.eval = "mChannelCreationURI.mRawPtr->mSpec"
+
+[trace."DocumentLoadListener::TriggerRedirectToRealChannel"]
+[trace."DocumentLoadListener::RedirectToRealChannelFinished"]
+[trace."DocumentLoadListener::FinishReplacementChannelSetup"]
+
+[class."DocumentChannelParent"]
+lifecycle = true
+[class."DocumentChannelParent".identity]
+# this needs to be sampled at the end of DocumentChannelParent::Init.
+loadListener.eval = "mDocumentLoadListener.mRawPtr"
+
+#[trace."DocumentChannelParent::Init"]
+
+[class."DocumentChannelChild"]

@@ -59,8 +59,23 @@ function classNameFromMethod(symName) {
   return className;
 }
 
+function extractThisPtr(callInfo) {
+  if (!callInfo.args || callInfo.args.length < 1) {
+    return null;
+  }
+  const firstArg = callInfo.args[0];
+  if (firstArg?.ident?.name !== "this") {
+    return null;
+  }
+  if (!firstArg?.value?.data) {
+    return null;
+  }
+  return firstArg.value.data;
+}
+
 class AnalyzerConfig {
-  constructor(rawConfig) {
+  constructor(rawConfig, path) {
+    this.path = path;
     this.rawConfig = rawConfig;
 
     this.tomlConfig = parse(rawConfig);
@@ -178,13 +193,21 @@ class AnalyzerConfig {
       const className = this.normalizeSymName(rawClassName);
       const classInfo = this.getOrCreateClass(className);
 
-      if (rawInfo.semType) {
-        classInfo.semType = rawInfo.semType;
-        this.semTypeToClassInfo.set(classInfo.semType, classInfo);
-      }
       if (rawInfo.lifecycle) {
         classInfo.trackLifecycle = true;
       }
+      if (rawInfo.semType) {
+        classInfo.semType = rawInfo.semType;
+      } else if (classInfo.trackLifecycle) {
+        // If there's no human assigned semType, we use the symbol name because
+        // all of our infrastructure really wants this.
+        classInfo.semType = classInfo.name;
+      }
+
+      if (classInfo.semType) {
+        this.semTypeToClassInfo.set(classInfo.semType, classInfo);
+      }
+
 
       // Lifecycle currently means that we automatically trace the constructors
       // and destructors, sampling the identity attributes at destructor time
@@ -224,6 +247,10 @@ class AnalyzerConfig {
    * lot of manual method enumeration).
    */
   _processTraceInfo(rawTraceDict) {
+    if (!rawTraceDict) {
+      return;
+    }
+
     for (const [rawSymName, rawInfo] of Object.entries(rawTraceDict)) {
       const symName = this.normalizeSymName(rawSymName);
       const className = classNameFromMethod(symName);
@@ -246,8 +273,8 @@ class AnalyzerConfig {
  * calls and derived states.
  */
 class Analyzer {
-  constructor(config) {
-    this.config = config;
+  constructor(configs) {
+    this.configs = configs;
 
     this.client = null;
     this.allQueryResults = [];
@@ -271,6 +298,13 @@ class Analyzer {
 
     // Key is an identity that wasn't a semType.
     this.conceptToInstanceMap = new Map();
+
+    // We aggregate this from all of our configs.
+    let semTypePieces = [];
+    for (const config of configs) {
+      semTypePieces.push(...config.semTypeToClassInfo);
+    }
+    this.semTypeToClassInfo = new Map(semTypePieces);
   }
 
   _getOrCreateClassResults(classInfo) {
@@ -333,18 +367,19 @@ class Analyzer {
   }
 
   async analyze(client, progressCallback) {
-    const config = this.config;
-    console.log('Analyzing using config', config);
-    const tomlConfig = this.config.tomlConfig;
+    console.log('Analyzing using configs', this.configs);
 
     this.client = client;
     const allQueryResults = this.allQueryResults = [];
 
     // ## Phase 1: Trace methods of interest, noting interesting instances
-    for (const traceDef of config.traceMethods) {
-      console.log('Tracing', traceDef.symName, traceDef);
-      progressCallback(`Tracing ${traceDef.symName}`, {});
-      await this._doTrace(traceDef);
+    for (const config of this.configs) {
+      console.log(`## Processing Config: ${config.path}`)
+      for (const traceDef of config.traceMethods) {
+        console.log('Tracing', traceDef.symName, traceDef);
+        progressCallback(`Tracing ${traceDef.symName}`, {});
+        await this._doTrace(traceDef);
+      }
     }
 
     // Establish the time mapping as early as possible so we can use it for
@@ -394,7 +429,7 @@ class Analyzer {
     const printSources = usePrint ? [] : undefined;
 
     if (traceDef.capture) {
-      for (const captureParam of info.capture) {
+      for (const captureParam of traceDef.capture) {
         printParts.push(captureParam);
         printNames.push(captureParam);
         printSources.push('capture');
@@ -495,26 +530,10 @@ class Analyzer {
    * lifetimes.
    */
   _deriveInstances() {
-    function extractThisPtr(callInfo) {
-      if (!callInfo.args || callInfo.args.length < 1) {
-        return null;
-      }
-      const firstArg = callInfo.args[0];
-      if (firstArg?.ident?.name !== "this") {
-        return null;
-      }
-      if (!firstArg?.value?.data) {
-        return null;
-      }
-      return firstArg.value.data;
-    }
-
     for (const { classInfo, constructorTraceResults, destructorTraceResults } of
          this.classResultsMap.values()) {
-      const semType = classInfo.semType || classInfo.name;
-
       const instanceMap = new Map();
-      this.semTypeToInstanceMap.set(semType, instanceMap);
+      this.semTypeToInstanceMap.set(classInfo.semType, instanceMap);
 
       // NB: There may be a fundamental flaw related to class slicing that we
       // will need to address.  (Or maybe pernosco does magic for us already?)
@@ -618,7 +637,7 @@ class Analyzer {
    */
   _deriveHierarchies() {
     for (const [semType, instanceMap] of this.semTypeToInstanceMap.entries()) {
-      const classInfo = this.config.semTypeToClassInfo.get(semType);
+      const classInfo = this.semTypeToClassInfo.get(semType);
       let linkTypesDefined = false;
       for (const [pidPtr, instList] of instanceMap.entries()) {
         for (const inst of instList) {
@@ -630,7 +649,7 @@ class Analyzer {
             // is, linkTypesDefined would happen once here or in a prior stage
             // which would allow this step to be rote application of the
             // identityLinkTypes knowledge.
-            const identClassInfo = this.config.semTypeToClassInfo.get(name);
+            const identClassInfo = this.semTypeToClassInfo.get(name);
             if (identClassInfo) {
               const linkInst = this._getSemTypeInstance(
                 name, rawIdent, inst.destructionMoment);
@@ -661,7 +680,19 @@ class Analyzer {
       const classInfo = traceDef.classInfo;
       for (const exec of execs) {
         // Process identity data for links.
-        if (exec.data?.identity) {
+        //
+        // If the class has its lifecycle tracked, then there won't actually be
+        // any identity information attached to these trace entries, and so
+        // instead we want to extract the "this" argument to create a
+        // self-identity link from the execution to its instance.
+        if (classInfo.trackLifecycle) {
+          const thisPtr = extractThisPtr(exec.call);
+          const thisPidPtr = makePidPtr(exec.call.meta.pid, thisPtr);
+
+          const linkInst = this._getSemTypeInstance(
+            classInfo.semType, thisPidPtr, exec.call.meta.entryMoment);
+          exec.identityLinks[classInfo.semType] = linkInst;
+        } else if (exec.data?.identity) {
           // XXX This logic is a mash-up from _deriveInstances and the above
           // and might benefit from refactoring for reuse, also maybe not.
           for (const [name, printed] of Object.entries(exec.data.identity)) {
@@ -821,14 +852,20 @@ class Analyzer {
         if (inst.identityLinks) {
           let foundParent = false;
           for (const [name, linkInst] of Object.entries(inst.identityLinks)) {
-            if (!foundParent) {
+            // linkInst may be null, in which case parenting is impossible and
+            // we should fall back to just performing the labeling.
+            //
+            // TODO: Maybe the linkInst check should be inside the condition
+            // here so that `foundParent` gets set to true so that null links
+            // don't end up inconsistently being parented?
+            if (!foundParent && linkInst) {
               const parentGroup = semGroupGetOrCreateForInstance(name, linkInst, startSeqId);
               parentGroup.nestedGroups.push(groupId);
               parentGroupId = parentGroup.id;
               treeLevel = parentGroup.treeLevel + 1;
               foundParent = true;
             } else {
-              content += `<br>${name}: ${linkInst.semLocalObjId}`;
+              content += `<br>${name}: ${linkInst?.semLocalObjId}`;
             }
           }
         }
@@ -878,7 +915,7 @@ class Analyzer {
     // method can end up in a single track/swim-lane *under its parent group*.
     // This gets keyed by "{parent group id or ROOT}-{method name}-{thread id}".
     const methodTrackMap = new Map();
-    
+
     for (const { symName, traceDef, execs } of this.traceResultsMap.values()) {
       let methodName = shortSymbolName(symName);
       for (const exec of execs) {
@@ -886,16 +923,19 @@ class Analyzer {
 
         let contentPieces = [];
         if (exec.data?.capture) {
-          for (const item of exec.data.capture) {
+          console.log("capture", exec.data.capture);
+          for (const [name, item] of Object.entries(exec.data.capture)) {
+            const useName = (item.name === "???") ? name : item.name;
             if (item.value && item.value.data) {
-              contentPieces.push(`${item.name}: ${item.value.data}`);
+              contentPieces.push(`${useName}: ${item.value.data}`);
             }
           }
         }
         if (exec.data?.classState) {
-          for (const item of exec.data.classState) {
+          for (const [name, item] of Object.entries(exec.data.classState)) {
+            const useName = (item.name === "???") ? name : item.name;
             if (item.value && item.value.data) {
-              contentPieces.push(`${item.name}: ${item.value.data}`);
+              contentPieces.push(`${useName}: ${item.value.data}`);
             }
           }
         }
@@ -971,10 +1011,20 @@ class Analyzer {
   }
 }
 
-export async function loadAnalyzer(path) {
-  const resp = await fetch(path);
-  const respText = await resp.text();
+export async function loadAnalyzer(paths) {
+  const configs = [];
 
-  const config = new AnalyzerConfig(respText);
-  return new Analyzer(config);
+  for (const path of paths) {
+    const resp = await fetch(path);
+    if (resp.status !== 200) {
+      console.error('Problem fetching', path, 'got', resp);
+      continue;
+    }
+    const respText = await resp.text();
+    const config = new AnalyzerConfig(respText, path);
+
+    configs.push(config);
+  }
+
+  return new Analyzer(configs);
 }
