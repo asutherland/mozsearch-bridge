@@ -16,16 +16,12 @@ const ORIGIN = `http://localhost:${PORT}`
  * the trace.  The query will be limited to `limit` results in events occurring
  * before and after the current position.
  */
-function buildExecutionQuery({ symbol, print }, limit=50) {
+function buildRangeQuery(mixArgs, limit=50) {
   const queryFocus = Object.assign({}, window.client.focus);
   const focusMoment = queryFocus.moment;
   return [
-    {
+    Object.assign({
       focus: queryFocus,
-      params: {
-        symbol,
-        print
-      },
       limits: {
         startMoment: {
           event: 0,
@@ -37,13 +33,9 @@ function buildExecutionQuery({ symbol, print }, limit=50) {
         direction: 'backward',
         lines: limit
       },
-    },
-    {
+    }, mixArgs),
+    Object.assign({
       focus: queryFocus,
-      params: {
-        symbol,
-        print
-      },
       limits: {
         startMoment: focusMoment,
         startOffset: 1125899906842624,
@@ -55,7 +47,7 @@ function buildExecutionQuery({ symbol, print }, limit=50) {
         direction: 'forward',
         lines: limit
       },
-    },
+    }, mixArgs),
   ];
 }
 
@@ -320,16 +312,16 @@ class POCServer extends BridgeServer {
     }
   }
 
-  async onMsg_executionQuery({ symbol, print, limit }, reply) {
-    console.log('poc: processing execution query for', symbol);
+  async onMsg_rangeQuery({ name, limit, mixArgs }, reply) {
+    console.log('poc: processing range query', name, mixArgs);
     let beforeQueryId, afterQueryId;
     try {
-      const [beforeReq, afterReq] = buildExecutionQuery({ symbol, print }, limit || 50);
+      const [beforeReq, afterReq] = buildRangeQuery(mixArgs, limit || 50);
       const beforeHandler = new BatchHandler();
-      beforeQueryId = this._openQuery('execution', beforeReq, beforeHandler);
+      beforeQueryId = this._openQuery(name, beforeReq, beforeHandler);
 
       const afterHandler = new BatchHandler();
-      afterQueryId = this._openQuery('execution', afterReq, afterHandler);
+      afterQueryId = this._openQuery(name, afterReq, afterHandler);
 
       const beforeResults = await beforeHandler.promise;
       beforeQueryId = null;

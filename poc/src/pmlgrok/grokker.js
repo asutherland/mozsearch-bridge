@@ -582,6 +582,12 @@ function grokPrinted(pml, ctx) {
   };
 }
 
+function grokSourceLineNumber(pml, ctx) {
+  return {
+    source: pml.a.source,
+  };
+}
+
 function grokIdent(pml, ctx) {
   const name = ctx.getFlattenedString(pml);
 
@@ -794,9 +800,40 @@ function grokItemTypeFunction(pml, ctx) {
     entryMoment: focusInfo.frame.entryMoment,
     returnMoment: focusInfo.frame.returnMoment,
     focusInfo,
+    source: pml.a.source,
   };
 
   return result;
+}
+
+const LINE_CONTENT_DELIM_DASH = "—";
+
+function grokBreakpointHit(pml, ctx) {
+  const result = ctx.parsify(
+    pml,
+    [
+      {
+        name: "file",
+        grokker: grokIdent,
+      },
+      ":",
+      {
+        name: "sourceLineNumber",
+        grokker: grokSourceLineNumber,
+      },
+      LINE_CONTENT_DELIM_DASH,
+      // This bit seems to be exactly the same information as the above but with
+      // the presumption that a SourceText lookup will be run to provide the
+      // content at the given position.
+      {
+        name: "sourceLine",
+        grokker: grokSourceLineNumber
+      }
+    ]);
+
+    result.breakpoint = true;
+
+    return result;
 }
 
 const PRINT_DELIM_ARROW = "→";
@@ -824,7 +861,7 @@ function findItemType(pml) {
  *
  * TODO: Things will get more complicated when print expressions get involved.
  */
-function grokRootPML(pml, mode, results) {
+function grokRootPML(pml, mode, results, focus) {
   const ctx = new GrokContext();
 
   // XXX I think this was still being speculatively played with previously and
@@ -858,56 +895,92 @@ function grokRootPML(pml, mode, results) {
     console.warn("Root PML has no children?", pml);
     return;
   }
-  if (pml.c.length !== 1) {
-    console.warn("Root PML has more than 1 child?", pml);
-    return;
-  }
 
-  // At this point, we expect to either have a single child with an
-  // "itemTypeName" attribute OR we expect for it to be wrapped in an inline
-  // that has "→" as a delimiter separating print values from that child.
-  let topPml = pml.c[0];
-  let canonChild = topPml;
+  let topPml;
+  let canonChild;
+  let canonGrokker;
   let printWrapped = false;
 
-  if (!canonChild.a &&
-      canonChild.c && canonChild.c.length && canonChild.c[0].a &&
-      canonChild.c[0].a.itemTypeName) {
-    if (canonChild.c[1].trim() !== PRINT_DELIM_ARROW) {
-      console.warn("Result is not print-wrapped but should be?", pml);
-      return;
-    }
+  if (mode === 'breakpoint') {
+    // Breakpoints end up looking like:
+    //
+    // 0. t=inline
+    //    0. t=ident
+    //    1. ":"
+    //    2. t=sourceLineNumber
+    //    3. " — "
+    //    4. t=source-line
+    // 1. " → "
+    // 2. t=inline (the normal print stuff)
+    //
+    // This differs from the 'execution' case by not having an additional layer
+    // of t=inline wrapping.
 
-    // For assertion purposes, we want to use this as our new canonChild, but
-    // we want to leave topPml the same as that's the basis of our printWrapped
-    // processing.
-    canonChild = canonChild.c[0];
+    topPml = pml;
     printWrapped = true;
-  }
-
-  if (canonChild.t !== "inline") {
-    console.warn("Canonical child is not inline", canonChild.t, canonChild);
-    return;
-  }
-  if (!canonChild.a) {
-    console.warn("Canonical child has no attributes?", canonChild);
-    return;
-  }
-  if (!canonChild.a.itemTypeName) {
-    console.warn("Canonical child has no itemTypeName?", canonChild.a, canonChild);
-    return;
-  }
-
-  let canonGrokker;
-  switch (canonChild.a.itemTypeName) {
-    case "function": {
-      canonGrokker = grokItemTypeFunction;
-      break;
+    // Curry
+    canonGrokker = (subPml, subCtx) => {
+      const result = grokBreakpointHit(subPml, subCtx);
+      result.meta = {
+        pid: focus.frame.addressSpaceUid.task.tid,
+        tid: focus.tuid.tid,
+        entryMoment: focus.frame.entryMoment,
+        returnMoment: focus.frame.returnMoment,
+        focusInfo: focus,
+        source: result.sourceLineNumber.source,
+      };
+      return result;
+    }
+  } else {
+    if (pml.c.length !== 1) {
+      console.warn("Root PML has more than 1 child?", pml);
+      return;
     }
 
-    default: {
-      console.warn("No grokker for", canonChild.a.itemTypeName);
+    // At this point, we expect to either have a single child with an
+    // "itemTypeName" attribute OR we expect for it to be wrapped in an inline
+    // that has "→" as a delimiter separating print values from that child.
+    topPml = pml.c[0];
+    canonChild = topPml;
+
+    if (!canonChild.a &&
+        canonChild.c && canonChild.c.length && canonChild.c[0].a &&
+        canonChild.c[0].a.itemTypeName) {
+      if (canonChild.c[1].trim() !== PRINT_DELIM_ARROW) {
+        console.warn("Result is not print-wrapped but should be?", pml);
+        return;
+      }
+
+      // For assertion purposes, we want to use this as our new canonChild, but
+      // we want to leave topPml the same as that's the basis of our printWrapped
+      // processing.
+      canonChild = canonChild.c[0];
+      printWrapped = true;
+    }
+
+    if (canonChild.t !== "inline") {
+      console.warn("Canonical child is not inline", canonChild.t, canonChild);
       return;
+    }
+    if (!canonChild.a) {
+      console.warn("Canonical child has no attributes?", canonChild);
+      return;
+    }
+    if (!canonChild.a.itemTypeName) {
+      console.warn("Canonical child has no itemTypeName?", canonChild.a, canonChild);
+      return;
+    }
+
+    switch (canonChild.a.itemTypeName) {
+      case "function": {
+        canonGrokker = grokItemTypeFunction;
+        break;
+      }
+
+      default: {
+        console.warn("No grokker for", canonChild.a.itemTypeName);
+        return;
+      }
     }
   }
 
@@ -934,9 +1007,9 @@ function grokRootPML(pml, mode, results) {
   results.push(result);
 }
 
-export function grokPML(pml, mode) {
+export function grokPML(pml, mode, focus) {
   const results = [];
-  grokRootPML(pml, mode, results);
+  grokRootPML(pml, mode, results, focus);
   return results[0];
 }
 

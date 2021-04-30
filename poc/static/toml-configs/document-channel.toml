@@ -14,6 +14,7 @@ creationURI.eval = "mChannelCreationURI.mRawPtr->mSpec"
 
 [class."DocumentChannelParent"]
 lifecycle = true
+identityMethod = "DocumentChannelParent::Init"
 [class."DocumentChannelParent".identity]
 # this needs to be sampled at the end of DocumentChannelParent::Init.
 loadListener.eval = "mDocumentLoadListener.mRawPtr"

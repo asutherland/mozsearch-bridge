@@ -73,6 +73,10 @@ function extractThisPtr(callInfo) {
   return firstArg.value.data;
 }
 
+function extractThisPtrFromIdentity(identity) {
+  return identity?.this?.value?.data;
+}
+
 class AnalyzerConfig {
   constructor(rawConfig, path) {
     this.path = path;
@@ -134,6 +138,22 @@ class AnalyzerConfig {
       // XXX need to implement the formerly conceived of "state" mapping
       stateDefs: [],
       identityDefs: [],
+      // If non-null, the method we should find the execution of in order to
+      // sample the identity.
+      //
+      // This ends up being 2-phase, where:
+      // 1. We find the executions of the method to identify at least one start
+      //    point.  For now we accumulate all the executions as a normal trace
+      //    invocation.
+      // 2. We query the dynamic annotations of one of the method executions in
+      //    order to identify the last line in the method.  We then issue a
+      //    breakpoint query with the identity values we want as a print
+      //    query.  This lets us know the value at exit time.  Note that this is
+      //    potentially imperfect for something initialized on the last line of
+      //    the method when the closing brace itself doesn't get its own
+      //    breakpoint.
+      identityMethodSymName: null,
+      identitySamplingTraceDef: null,
       // This is populated by Analyzer._deriveHierarchies
       identityLinkTypes: {},
     };
@@ -219,15 +239,38 @@ class AnalyzerConfig {
           classInfo,
           capture: null,
         });
-        this.traceMethods.push({
+        const destructorTraceDef = {
           symName: deriveClassDestructor(className),
           mode: 'destructor',
           classInfo,
           capture: null,
-        });
+        };
+        classInfo.identitySamplingTraceDef = destructorTraceDef;
+        this.traceMethods.push(destructorTraceDef);
+      }
+
+      if (rawInfo.identityMethod) {
+        classInfo.identityMethodSymName =
+          this.normalizeSymName(rawInfo.identityMethod);
+        const identityTraceDef = {
+          symName: classInfo.identityMethodSymName,
+          mode: 'last-line',
+          classInfo,
+          capture: null,
+        };
+        classInfo.identitySamplingTraceDef = identityTraceDef;
+        this.traceMethods.push(identityTraceDef);
       }
 
       if (rawInfo.identity) {
+        // We need to explicitly cram a "this" in ahead of any other identity
+        // data when using a breakpoint.
+        if (rawInfo.identityMethod) {
+          classInfo.identityDefs.push({
+            name: 'this',
+            eval: 'this',
+          });
+        }
         for (const [name, capInfo] of Object.entries(rawInfo.identity)) {
           classInfo.identityDefs.push({
             name,
@@ -316,6 +359,7 @@ class Analyzer {
         // TODO: Make sure we actually unify over all constructors.
         constructorTraceResults: null,
         destructorTraceResults: null,
+        identityTraceResults: null,
       };
       this.classResultsMap.set(classInfo.name, classResults);
     }
@@ -396,7 +440,7 @@ class Analyzer {
     return [];
   }
 
-  async _doTrace(traceDef) {
+  async _doTrace(traceDef, pass = 'initial', queryParams) {
     const { symName, classInfo } = traceDef;
 
     let stateDefs = null;
@@ -443,9 +487,19 @@ class Analyzer {
       }
     }
     // If this is a class that has its lifecycle tracked, then there's no need
-    // to extract the identity on anything but the destructor.
+    // to extract the identity on anything but the identitySamplingTraceDef.
+    // An edge case here is in 'last-line' mode we actually will run a second
+    // query after this one and that's when we should do that.
+    //
+    // XXX this is unwieldy for the last-line case and it's appropriate to
+    // revisit all of this if some other pre/post-pass becomes necessary.  For
+    // last-line, it's quite likely/possible pernosco will take on this
+    // responsibility in the future and we can avoid doing any extra work, which
+    // is why we're not getting fancier here.
     if (identityDefs &&
-        (!classInfo.trackLifecycle || traceDef.mode === 'destructor')) {
+        (!classInfo.identitySamplingTraceDef ||
+          (classInfo.identitySamplingTraceDef === traceDef &&
+           (traceDef.mode !== 'last-line' || pass !== 'initial')))) {
       for (const def of identityDefs) {
         printParts.push(def.eval);
         printNames.push(def.name);
@@ -455,17 +509,33 @@ class Analyzer {
 
     const print = printParts ? printParts.join(', ') : undefined;
 
+    if (!queryParams) {
+      queryParams = {
+        name: 'execution',
+        limit: 222,
+        mixArgs: {
+          params: {
+            symbol: symName,
+            print
+          },
+        },
+      };
+    } else {
+      queryParams.mixArgs.params.print = print;
+    }
+
     // This will be an array of items of the form { items: [ { focus, pml }]}
     const rawResults = await this.client.sendMessageAwaitingReply(
-      'executionQuery',
-      { symbol: symName, print, limit: 222 });
+      'rangeQuery',
+      queryParams
+    );
 
     const execs = [];
     for (const row of rawResults) {
       if (row.items) {
         for (const item of row.items) {
           if (item.pml) {
-            const grokked = grokPML(item.pml, 'executions');
+            const grokked = grokPML(item.pml, queryParams.name, item.focus);
             let call;
             let data = null;
             if (grokked.queried) {
@@ -515,6 +585,102 @@ class Analyzer {
         break;
       }
 
+      case 'last-line': {
+        if (pass === 'initial') {
+          // XXX Include this in the trace results for now so that we get the
+          // init calls showing up on the timeline in order to ensure that the
+          // object shows up at all... but this perhaps should be optional or
+          // at least collapsed into the lifeline.
+          this.traceResultsMap.set(symName, traceResults);
+
+          // TODO: Extract out the various sub-command invocations here.
+          if (execs.length) {
+            // ## Figure out the last line so we can do a breakpoint query
+
+            // Use the focus from the first exec.  It doesn't matter which exec,
+            // just an exec.
+            const useFocus = execs[0].call.meta.focusInfo;
+            const useSourceUrl = execs[0].call.meta?.source?.url;
+
+            // ## Get the annotations!
+            // Results look like:
+            // - glyphMarginDecorations: {}
+            //   - points: Array of 4-tuples:
+            //     0. { l: [line, column] } designed to be translated by
+            //        `textReferenceToPosition`.
+            //     1. "strong" or "weak" ("kind", where strong is this loop)
+            //     2. { data, frame, moment, node, tuid }, but optional and
+            //        where it seems expected that the frame will be null and
+            //        should instead be populated from this focus's frame.
+            //     3. 0.  ("titleIndex" which is some kind of weird lookup
+            //        magic that my experimentation doesn't trigger.)
+            let annoResults = await this.client.sendMessageAwaitingReply(
+              'simpleQuery',
+              {
+                name: 'dynamicAnnotations',
+                mixArgs: {
+                  // Use the entry moment's focus.
+                  focus: useFocus,
+                  // We should have the source from the call here.
+                  source: useSourceUrl,
+                }
+              }
+            );
+            // There should only be a single value in the array.
+            annoResults = annoResults[0];
+
+            let lastLine = 0;
+            let linePos = null;
+            let lineFocus = null;
+            if (annoResults?.glyphMarginDecoration?.points) {
+              for (const point of annoResults.glyphMarginDecoration.points) {
+                const line = point[0].l[0];
+                if (line >= lastLine) {
+                  lastLine = line;
+                  linePos = point[0];
+                  lineFocus = point[2];
+                  lineFocus.frame = useFocus.frame;
+                }
+              }
+            }
+
+            // ## Do the breakpoint query
+            if (lineFocus) {
+              await this._doTrace(
+                traceDef,
+                'last-line',
+                {
+                  name: 'breakpoint',
+                  limit: 222,
+                  mixArgs: {
+                    params: {
+                      url: useSourceUrl,
+                      // The o is an offset in the source file that SourceText
+                      // goes to a lot of work to figure out.
+                      //
+                      // For now we're just going to try to pass a 0 offset and
+                      // see if that works.  Otherwise, it likely makes sense
+                      // to create an async protocol to make SourceText do the
+                      // work for us via
+                      // `originalTextPositionToClientTextReference` which
+                      // expects the { l: [l, c] } pos to have been expanded to
+                      // { lineNumber, column } as
+                      // `textReferenceToOriginalTextPosition` does.
+                      points: [{ l: linePos.l[0], c: linePos.l[1], o: 0 }]
+                    },
+                  },
+                });
+              }
+          }
+        } else {
+          const classResults = this._getOrCreateClassResults(traceDef.classInfo);
+          classResults.identityTraceResults = traceResults;
+          // Also treat this as a normal trace result?
+          //this.traceResultsMap.set(symName, traceResults);
+        }
+        break;
+      }
+
       default: {
         this.traceResultsMap.set(symName, traceResults);
         break;
@@ -530,7 +696,7 @@ class Analyzer {
    * lifetimes.
    */
   _deriveInstances() {
-    for (const { classInfo, constructorTraceResults, destructorTraceResults } of
+    for (const { classInfo, constructorTraceResults, destructorTraceResults, identityTraceResults } of
          this.classResultsMap.values()) {
       const instanceMap = new Map();
       this.semTypeToInstanceMap.set(classInfo.semType, instanceMap);
@@ -565,7 +731,7 @@ class Analyzer {
           const instList = getInstanceListForPtr(thisPidPtr);
 
           // This is inherently the right sequential ordering MODULO the fact
-          // that we use limits in our query requests so we could be only
+          // that we use limits in our query request;s so we could be only
           // capturing a limited subset of the entire space.
           instList.push({
             // Create a per-semType object id by using the list index.  That is,
@@ -584,6 +750,49 @@ class Analyzer {
             rawIdentity: {},
             identityLinks: {},
           });
+        }
+      }
+
+      // Identity trace results which are implicitly from a 'last-line' config
+      // at this time and which therefore mean that we also had to pull the
+      // "this" out via a print.
+      if (identityTraceResults) {
+        const { symName, traceDef, execs } = identityTraceResults;
+        for (const exec of execs) {
+          const thisPtr = extractThisPtrFromIdentity(exec.data.identity);
+          const thisPidPtr = makePidPtr(exec.call.meta.pid, thisPtr);
+          const instList = getInstanceListForPtr(thisPidPtr);
+
+          const inst = findInstanceBestConstruction(
+            instList, exec.call.meta.entryMoment);
+          // XXX ignore destructions for which we lack a construction for now...
+          if (!inst) {
+            continue;
+          }
+
+          // Perform identity extractions here as well.
+          if (exec.data && exec.data.identity) {
+            for (const [name, printed] of Object.entries(exec.data.identity)) {
+              // we extracted this above.
+              if (name === 'this') {
+                continue;
+              }
+
+              let rawVal = printed?.value?.data;
+              // Normalize pointers into PidPtrs.
+              // XXX The grok process can/should retain the type information
+              // here and or propagate it upwards into the classInfo so we
+              // aren't doing shoddy if reliable hacks here or requiring the
+              // config file to contain things that can be inferred.
+              let val;
+              if (rawVal && rawVal.startsWith('0x')) {
+                val = makePidPtr(exec.call.meta.pid, rawVal);
+              } else {
+                val = rawVal;
+              }
+              inst.rawIdentity[name] = val;
+            }
+          }
         }
       }
 

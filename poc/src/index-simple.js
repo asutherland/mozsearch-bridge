@@ -582,8 +582,17 @@ async function queryExecutions(symName, print) {
   const reqId = eOutput.reqId = gNextReqId++;
 
   const results = await client.sendMessageAwaitingReply(
-    'executionQuery',
-    { symbol: symName, print });
+    'rangeQuery',
+    {
+      name: 'execution',
+      limit: 50,
+      mixArgs: {
+        params: {
+          symbol: symName,
+          print
+        },
+      },
+    });
 
   let mode = print ? 'executions-with-print' : 'executions';
 
