@@ -1,35 +1,29 @@
 [trace."mozilla::dom::ServiceWorkerRegistrationInfo::FinishActivate"]
 
 [trace."mozilla::dom::ServiceWorkerUpdateJob::ComparisonResult"]
-capture=[
-  "Status",
-  "aInCacheAndEqual",
-]
+[trace."mozilla::dom::ServiceWorkerUpdateJob::ComparisonResult".capture]
+status.eval = "Status"
+inCache.eval = "aInCacheAndEqual"
 
 [trace."mozilla::dom::serviceWorkerScriptCache::PurgeCache"]
-capture=[
-  "aPrincipal->mURI.mRawPtr->mSpec"
-]
+capture.principalURI.eval = "aPrincipal->mURI.mRawPtr->mSpec"
 
 [trace."mozilla::dom::ServiceWorkerRegistrar::RegisterServiceWorker"]
 
 [trace."mozilla::dom::RemoteWorkerController::ExecServiceWorkerOp"]
-capture=[
-  "aArgs->mType"
-]
+capture.type.eval = "aArgs->mType"
 
 [disabled."mozilla::net::InterceptedHttpChannel::AsyncOpen"]
 
 [trace."mozilla::net::InterceptedHttpChannel::ResetInterception"]
 
 [class."mozilla::net::InterceptedHttpChannel"]
-state=[
-  "mURI.mRawPtr->mSpec"
-]
+semType = "interceptedChannel"
+lifecycle = true
+[class."mozilla::net::InterceptedHttpChannel".identity]
+uri.eval = "mURI.mRawPtr->mSpec"
 
 [trace."mozilla::dom::workerinternals::LoadMainScript"]
-capture=[
-  "aScriptURL"
-]
+capture.scriptURL.eval = "aScriptURL"
 
 [trace."mozilla::dom::FetchEventOp::Exec"]

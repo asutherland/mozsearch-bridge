@@ -626,8 +626,30 @@ function grokCompoundIdent(pml, ctx) {
     const name = left.name + "." + right.name;
 
     // There's other information in here, but it's not particularly useful yet.
-    return {
+    const ret = {
       name
+    };
+    // If the left part had a value, expose that.
+    if (left.value) {
+      ret.rootValue = left.value;
+    }
+    return ret;
+  }
+
+  if (ctx.hasPairDelim(pml, "@")) {
+    // We expect this nesting to happen in the case where we're piercing a
+    // (smart?) pointer and including the pointer's value as well as the
+    // contents of what the pointer is referring to.  So we expose this as a
+    // name with a value.
+    //
+    // It's possible this case should actually be handled by grokFunctionArgName
+    // more directly.
+    let left = processIdent(pml.c[0]);
+    let right = ctx.runGrokkerOnNode(grokValue, pml.c[2]);
+
+    return {
+      name: left.name,
+      value: right,
     };
   }
 
@@ -636,8 +658,20 @@ function grokCompoundIdent(pml, ctx) {
 }
 
 /**
- * This is either a t=ident, a t=inline with [t=ident, "@", t=number], or a
- * further t=inline variant array variant [[t=ident, "@", t=number], "[0]"]
+ * Many options:
+ * - t=ident
+ * - t=inline with [t=ident, "@", t=number]
+ * - t=inline variant array variant [[t=ident, "@", t=number], "[0]"]
+ * - Fancy simple struct expansion:
+ *   `aCreationTimestamp@0x621019ec2458.mValue={mUsedCanonicalNow=0, mTimeStamp=1216622902540}`
+ *   - t=inline (yellow)
+ *     - t=inline (blue)
+ *       - t=inline [t=ident "aCreationTimestamp", "@", t=number 0xblah] (green)
+ *       - "."
+ *       -  t=ident "mValue"
+ *     - "="
+ *     - t=inline (blue), "{"/"}" wrapped, t=inline comma-delimited "="-split
+ *
  */
 function grokFunctionArgName(pml, ctx) {
   // ## Simple Case: Just an ident

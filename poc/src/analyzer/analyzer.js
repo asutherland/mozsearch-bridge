@@ -135,7 +135,6 @@ class AnalyzerConfig {
       subclasses: new Set(),
       // Immediate superclasses, currently inferred from "subclasses".
       superclasses: new Set(),
-      // XXX need to implement the formerly conceived of "state" mapping
       stateDefs: [],
       identityDefs: [],
       // If non-null, the method we should find the execution of in order to
@@ -262,6 +261,15 @@ class AnalyzerConfig {
         this.traceMethods.push(identityTraceDef);
       }
 
+      if (rawInfo.state) {
+        for (const [name, capInfo] of Object.entries(rawInfo.state)) {
+          classInfo.stateDefs.push({
+            name,
+            eval: capInfo.eval,
+          });
+        }
+      }
+
       if (rawInfo.identity) {
         // We need to explicitly cram a "this" in ahead of any other identity
         // data when using a breakpoint.
@@ -299,11 +307,22 @@ class AnalyzerConfig {
       const className = classNameFromMethod(symName);
       const classInfo = this.getOrCreateClass(className);
 
+      let captureDefs;
+      if (rawInfo.capture) {
+        captureDefs = [];
+        for (const [name, capInfo] of Object.entries(rawInfo.capture)) {
+          captureDefs.push({
+            name,
+            eval: capInfo.eval,
+          });
+        }
+      }
+
       this.traceMethods.push({
         symName,
         mode: 'trace',
         classInfo,
-        capture: rawInfo.capture,
+        captureDefs,
       });
     }
   }
@@ -467,15 +486,15 @@ class Analyzer {
     }
     walkClassInfo(classInfo);
 
-    const usePrint = traceDef.capture || stateDefs || identityDefs;
+    const usePrint = traceDef.captureDefs || stateDefs || identityDefs;
     const printParts = usePrint ? [] : undefined;
     const printNames = usePrint ? [] : undefined;
     const printSources = usePrint ? [] : undefined;
 
-    if (traceDef.capture) {
-      for (const captureParam of traceDef.capture) {
-        printParts.push(captureParam);
-        printNames.push(captureParam);
+    if (traceDef.captureDefs) {
+      for (const capDef of traceDef.captureDefs) {
+        printParts.push(capDef.eval);
+        printNames.push(capDef.name);
         printSources.push('capture');
       }
     }
@@ -1132,7 +1151,6 @@ class Analyzer {
 
         let contentPieces = [];
         if (exec.data?.capture) {
-          console.log("capture", exec.data.capture);
           for (const [name, item] of Object.entries(exec.data.capture)) {
             const useName = (item.name === "???") ? name : item.name;
             if (item.value && item.value.data) {
