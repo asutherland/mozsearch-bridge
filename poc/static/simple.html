@@ -3,6 +3,10 @@
     <link href="simple.css" rel="stylesheet">
     <link href="vis-timeline.custom.css" rel="stylesheet">
     <script type="application/javascript" src="simple.bundle.js"></script>
+    <!-- Necessary for worker usage, maybe.  d3-graphviz seems intended to be
+         used as a drop-in on a page rather than compiled via webpack and it's
+         possible more is being entrained than necessary. -->
+    <script src="index.min.js" type="javascript/worker"></script>
     <title>Pernosco Bridge Simple Example</title>
   </head>
 <body>
@@ -33,6 +37,7 @@
       </div>
       <div id="tab-analyzer" class="tab" hidden=true>
         <input id="analyze-run" type="button" value="Run Analysis" />
+        <input id="vis-run" type="button" value="Visualize Hierarchies" />
       </div>
       <div id="tab-canned" class="tab" hidden=true>
         <input id="show-current-tasks" type="button" value="Show Current Tasks" />

@@ -1,0 +1,8 @@
+namespace.prefix = "mozilla::dom::"
+
+[class."BrowsingContext"]
+semType = "browsingContext"
+lifecycle = true
+[class."DocumentLoadListener".identity]
+parentWindow.eval = "mParentWindow.mRawPtr"
+

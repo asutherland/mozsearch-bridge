@@ -198,11 +198,11 @@ class GrokContext {
   }
 
   error(...args) {
-    console.error(...args, 'contextStack: ', this.stack);
+    console.error(...args, 'contextStack: ', this.stack.concat());
   }
 
   warn(...args) {
-    console.warn(...args, 'contextStack: ', this.stack);
+    console.warn(...args, 'contextStack: ', this.stack.concat());
   }
 
   /**
@@ -229,7 +229,9 @@ class GrokContext {
     if (this.verbose) {
       this.log("parsifying node", pml);
     }
+    let iNode = -1;
     for (let node of pml.c) {
+      iNode++;
       let handler = allHandlers[iHandler];
       let nextHandler;
       if (iHandler + 1 < allHandlers.length) {
@@ -279,7 +281,7 @@ class GrokContext {
         }
 
         this.error(
-          `Found unexpected delimiter ${node} for`, iHandler, 'in',
+          `Found unexpected delimiter ${node} [${iNode}] for`, iHandler, 'in',
           allHandlers, `(was expecting?: ${expectingHandlerDelim})`, pml);
         break;
       }
@@ -313,7 +315,7 @@ class GrokContext {
 
   /**
    * Variant on `parsify` that expects the pml node it is handed is t="inline"
-   * with only
+   * with a single content child that's wrapped with the specified wrapper.
    */
   unwrapAndParsify(pml, wrapper, allHandlers) {
     if (!pml || !pml.c) {
@@ -342,8 +344,22 @@ class GrokContext {
 
     // There are situations related to objects where we keep running into
     // wrappers, so just keep unwrapping until we run out of the wrapper.
+    // XXX this may now be handled by `grokObjectKeyAndValue`?
     if (this.hasWrappingDelims(kid, wrapper.opens, wrapper.closes)) {
       return this.unwrapAndParsify(kid, wrapper, allHandlers);
+    }
+    // We can end up in a situation like objects where there's only a single
+    // entry in the list and the comma-delimited list is elided.  In that case,
+    // when the wrapper config indicates it, we can directly pierce to only
+    // invoke the (single handler).
+    else if (wrapper.pierceIfDelimIs && kid.c.length === 3 &&
+             this.hasPairDelim(kid, wrapper.pierceIfDelimIs) &&
+             allHandlers.length === 1) {
+      const handler = allHandlers[0];
+      const soleValue = this.runGrokkerOnNode(handler.grokker, kid);
+      return {
+        [handler.name]: [soleValue]
+      };
     } else {
       return this.parsify(kid, allHandlers);
     }
@@ -504,11 +520,16 @@ function grokRendererPointer(val, ctx) {
  * wrapped in extra layers of braces.
  */
 function grokObject(pml, ctx) {
+  // At least in the superclass case, it's possible that if the superclass only
+  // has a single attribute, that we won't end up with the comma nesting level
+  // and instead will only have the
+
   return ctx.unwrapAndParsify(
     pml,
     {
       opens: "{",
       closes: "}",
+      pierceIfDelimIs: "=",
     },
     [
       {
@@ -653,11 +674,21 @@ function grokCompoundIdent(pml, ctx) {
     };
   }
 
+  if (ctx.isArraySubscripting(pml)) {
+    // We just generally recurse for this.
+    const wrapped = pml.c[0];
+    const subscripted = ctx.runGrokkerOnNode(grokCompoundIdent, wrapped);
+    subscripted.subscript = pml.c[1];
+    return subscripted;
+  }
+
   console.warn("Unknown compound ident format", pml);
   return null;
 }
 
 /**
+ * There's weird overlap with `grokCompoundIdent` here.
+ *
  * Many options:
  * - t=ident
  * - t=inline with [t=ident, "@", t=number]
@@ -702,6 +733,13 @@ function grokFunctionArgName(pml, ctx) {
     };
   }
 
+  // ## It's probably a compound ident...
+  // XXX this should perhaps just be a direct invocation of grokCompoundIdent,
+  // but the semantics around { ident: { name }, value } versus
+  // { ident: { name, value }} should likely be clarified.  Like should we shell
+  // out but propagate any value up?
+
+
   // ## "." delimited indicating a compound ident
   if (ctx.isInline(pml) && ctx.hasPairDelim(pml, ".")) {
     return {
@@ -720,25 +758,11 @@ function grokFunctionArgName(pml, ctx) {
 
   // This is the array-subscripted situation.
   if (ctx.isArraySubscripting(pml)) {
-    if (ctx.hasPairDelim(pml.c[0], "@")) {
-      const wrapped = pml.c[0];
-      let ident = ctx.runGrokkerOnNode(grokCompoundIdent, wrapped.c[0]);
-      ident.subscript = pml.c[1];
-      return {
-        // This could be a simple ident or ?maybe? a compound ident
-        ident,
-        value: ctx.runGrokkerOnNode(grokValue, wrapped.c[2]),
-      };
-    }
-    if (ctx.isIdent(pml.c[0])) {
-      let ident = ctx.runGrokkerOnNode(grokCompoundIdent, pml.c[0]);
-      ident.subscript = pml.c[1];
-      return {
-        // This could be a simple ident or ?maybe? a compound ident
-        ident,
-        value: undefined,
-      };
-    }
+    // We just generally recurse for this.
+    const wrapped = pml.c[0];
+    const subscripted = ctx.runGrokkerOnNode(grokFunctionArgName, wrapped);
+    subscripted.subscript = pml.c[1];
+    return subscripted;
   }
 
   console.warn("Unknown function argument name format", pml);

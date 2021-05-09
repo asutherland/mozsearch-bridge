@@ -23,3 +23,10 @@ loadListener.eval = "mDocumentLoadListener.mRawPtr"
 #[trace."DocumentChannelParent::Init"]
 
 [class."DocumentChannelChild"]
+
+[class."HttpChannelParent"]
+[class."HttpChannelParent".identity]
+# For now just pierce the channel to get the URI
+uri.eval = "mChannel.mRawPtr->mURI.mRawPtr->mSpec"
+
+[trace."HttpChannelParent::RecvRedirect2Verify"]

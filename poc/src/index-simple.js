@@ -3,6 +3,9 @@ import { BridgeClient } from './bridge/client.js';
 import { Timeline } from "vis-timeline/peer";
 import { DataSet } from "vis-data/peer";
 
+import { graphviz } from "d3-graphviz";
+import { wasmFolder } from "@hpcc-js/wasm"
+
 import { loadAnalyzer } from './analyzer/analyzer.js';
 
 import { grokPML, grokPMLRows } from './pmlgrok/grokker.js';
@@ -797,6 +800,8 @@ async function queryEvaluate(symName) {
   }
 }
 
+let gAnalyzer;
+
 async function runAnalyzer() {
   const eOutput = document.getElementById('output-content');
   const eStatus = document.getElementById('status-content');
@@ -806,7 +811,7 @@ async function runAnalyzer() {
 
   eStatus.textContent = '';
 
-  const analyzer = await loadAnalyzer([
+  const analyzer = gAnalyzer = await loadAnalyzer([
     'toml-configs/sw-lifecycle.toml',
     'toml-configs/document-channel.toml'
   ]);
@@ -823,6 +828,10 @@ async function runAnalyzer() {
     renderTimelineFromAnalysis(analyzer, eOutput);
     //prettifyQueryResultsInto(results, eOutput, 'raw');
   }
+}
+
+async function runVisualizer() {
+  graphviz('#output-content', {}).renderDot('digraph  {a -> b}');
 }
 
 let gLastFocus = null;
@@ -904,6 +913,10 @@ window.addEventListener('load', () => {
 
   document.getElementById('analyze-run').addEventListener('click', (evt) => {
     runAnalyzer();
+  });
+
+  document.getElementById('vis-run').addEventListener('click', (evt) => {
+    runVisualizer();
   });
 
   document.getElementById('output-show-as-form').addEventListener('change', (evt) => {

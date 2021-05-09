@@ -27,3 +27,11 @@ uri.eval = "mURI.mRawPtr->mSpec"
 capture.scriptURL.eval = "aScriptURL"
 
 [trace."mozilla::dom::FetchEventOp::Exec"]
+
+# Although the lifecycle logic will find all the load infos, we should only
+# display those that have a controller set / cleared.
+[class."mozilla::net::LoadInfo"]
+semType = "loadInfo"
+lifecycle = true
+[trace."mozilla::net::LoadInfo::SetController"]
+[trace."mozilla::net::LoadInfo::ClearController"]
