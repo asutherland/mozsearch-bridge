@@ -6,8 +6,11 @@ lifecycle = true
 # We sample at constructor time from arguments
 identityMethod = "constructor"
 [class."BrowsingContext".identity]
-#browsingContext.eval = "mParentWindow.mRawPtr"
-# And we can just pull this out of the arguments.
+# We can just pull this out of the arguments at construction time, but
+# alternately could have done:
+#   browsingContext.eval = "mParentWindow.mRawPtr"
+# but that won't be valid at the start of the constructor and so we need to pick
+# some time to sample it.
 windowContext.arg = "aParentWindow"
 
 [class."WindowContext"]
@@ -16,7 +19,5 @@ lifecycle = true
 # We sample at constructor time from arguments
 identityMethod = "constructor"
 [class."WindowContext".identity]
-#browsingContext.eval = "mParentWindow.mRawPtr"
-# And we can just pull this out of the arguments.
 browsingContext.arg = "aBrowsingContext"
 
