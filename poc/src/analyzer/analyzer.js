@@ -3,6 +3,9 @@ import bounds from 'binary-search-bounds';
 
 import { grokPML, grokPMLRows } from '../pmlgrok/grokker.js';
 
+import { HierNode, HierBuilder } from './diagramming/core_diagram.js';
+
+
 function shortSymbolName(name) {
   const parts = name.split('::');
   return parts.slice(-2).join('::');
@@ -75,6 +78,16 @@ function extractThisPtr(callInfo) {
 
 function extractThisPtrFromIdentity(identity) {
   return identity?.this?.value?.data;
+}
+
+function extractRawArgFromCall(argName, call) {
+  for (const argData of call.args) {
+    if (argData?.ident?.name == argName) {
+      // We don't deref the "value.data", that happens later.
+      return argData;
+    }
+  }
+  return null;
 }
 
 class AnalyzerConfig {
@@ -232,23 +245,35 @@ class AnalyzerConfig {
       // and destructors, sampling the identity attributes at destructor time
       // so that we can build an object instance for hierarchy purposes.
       if (classInfo.trackLifecycle) {
-        this.traceMethods.push({
+        const constructorTraceDef = {
           symName: deriveClassConstructor(className),
           mode: 'constructor',
           classInfo,
           capture: null,
-        });
+        };
+        this.traceMethods.push(constructorTraceDef);
+
         const destructorTraceDef = {
           symName: deriveClassDestructor(className),
           mode: 'destructor',
           classInfo,
           capture: null,
         };
-        classInfo.identitySamplingTraceDef = destructorTraceDef;
+
+        if (rawInfo.identityMethod === "constructor") {
+          classInfo.identitySamplingTraceDef = constructorTraceDef;
+        } else {
+          classInfo.identitySamplingTraceDef = destructorTraceDef;
+        }
         this.traceMethods.push(destructorTraceDef);
       }
 
-      if (rawInfo.identityMethod) {
+      if (rawInfo.identityMethod === "constructor") {
+        // We actually handled this above in trackLifecycle.  We just want to
+        // avoid the next case from handling this.  And the default is
+        // destructor.
+      }
+      else if (rawInfo.identityMethod) {
         classInfo.identityMethodSymName =
           this.normalizeSymName(rawInfo.identityMethod);
         const identityTraceDef = {
@@ -273,7 +298,7 @@ class AnalyzerConfig {
       if (rawInfo.identity) {
         // We need to explicitly cram a "this" in ahead of any other identity
         // data when using a breakpoint.
-        if (rawInfo.identityMethod) {
+        if (classInfo.identitySamplingTraceDef?.mode === 'last-line') {
           classInfo.identityDefs.push({
             name: 'this',
             eval: 'this',
@@ -283,6 +308,7 @@ class AnalyzerConfig {
           classInfo.identityDefs.push({
             name,
             eval: capInfo.eval,
+            arg: capInfo.arg,
           });
         }
       }
@@ -491,6 +517,11 @@ class Analyzer {
     const printNames = usePrint ? [] : undefined;
     const printSources = usePrint ? [] : undefined;
 
+    // For pulling stuff out of arguments.
+    const argLookups = []
+    const argNames = [];
+    const argSources = [];
+
     if (traceDef.captureDefs) {
       for (const capDef of traceDef.captureDefs) {
         printParts.push(capDef.eval);
@@ -520,13 +551,19 @@ class Analyzer {
           (classInfo.identitySamplingTraceDef === traceDef &&
            (traceDef.mode !== 'last-line' || pass !== 'initial')))) {
       for (const def of identityDefs) {
-        printParts.push(def.eval);
-        printNames.push(def.name);
-        printSources.push('identity');
+        if (def.arg) {
+          argLookups.push(def.arg);
+          argNames.push(def.name);
+          argSources.push('identity');
+        } else {
+          printParts.push(def.eval);
+          printNames.push(def.name);
+          printSources.push('identity');
+        }
       }
     }
 
-    const print = printParts ? printParts.join(', ') : undefined;
+    const print = printParts?.length ? printParts.join(', ') : undefined;
 
     if (!queryParams) {
       queryParams = {
@@ -573,6 +610,23 @@ class Analyzer {
               }
             } else {
               call = grokked;
+            }
+            if (argLookups.length) {
+              if (!data) {
+                data = {};
+              }
+              for (let i = 0; i < argLookups.length; i++) {
+                const argName = argLookups[i];
+                const argValue = extractRawArgFromCall(argName, call);
+                const name = argNames[i];
+                const source = argSources[i];
+
+                let sourceDict = data[source];
+                if (!sourceDict) {
+                  sourceDict = data[source] = {};
+                }
+                sourceDict[name] = argValue;
+              }
             }
             this._learnMoment(call.meta.entryMoment);
             this._learnMoment(call.meta.returnMoment);
@@ -752,7 +806,7 @@ class Analyzer {
           // This is inherently the right sequential ordering MODULO the fact
           // that we use limits in our query request;s so we could be only
           // capturing a limited subset of the entire space.
-          instList.push({
+          const inst = {
             // Create a per-semType object id by using the list index.  That is,
             // this identifier is only unique for a given semType; the
             // underlying memory could obviously have also been many other
@@ -768,7 +822,31 @@ class Analyzer {
             // Identity extracted values
             rawIdentity: {},
             identityLinks: {},
-          });
+          };
+          instList.push(inst);
+
+          // XXX this is taken directly from the destructor, and it's also the
+          // case that the identityTraceResults extra thing is almost the same
+          // as well.
+
+          // Perform identity extractions here as well.
+          if (exec.data && exec.data.identity) {
+            for (const [name, printed] of Object.entries(exec.data.identity)) {
+              let rawVal = printed?.value?.data;
+              // Normalize pointers into PidPtrs.
+              // XXX The grok process can/should retain the type information
+              // here and or propagate it upwards into the classInfo so we
+              // aren't doing shoddy if reliable hacks here or requiring the
+              // config file to contain things that can be inferred.
+              let val;
+              if (rawVal && rawVal.startsWith('0x')) {
+                val = makePidPtr(exec.call.meta.pid, rawVal);
+              } else {
+                val = rawVal;
+              }
+              inst.rawIdentity[name] = val;
+            }
+          }
         }
       }
 
@@ -880,7 +958,11 @@ class Analyzer {
             const identClassInfo = this.semTypeToClassInfo.get(name);
             if (identClassInfo) {
               const linkInst = this._getSemTypeInstance(
-                name, rawIdent, inst.destructionMoment);
+                // XXX we were only using the destruction moment here, but that can
+                // be null... we should potentially instead be using the last
+                // known moment... but for now I'm just having us use the
+                // construction moment, but this needs a better rationale.
+                name, rawIdent, inst.destructionMoment || inst.constructionMoment);
               inst.identityLinks[name] = linkInst;
               if (!linkTypesDefined) {
                 if (classInfo) {
@@ -1093,7 +1175,9 @@ class Analyzer {
               treeLevel = parentGroup.treeLevel + 1;
               foundParent = true;
             } else {
-              content += `<br>${name}: ${linkInst?.semLocalObjId}`;
+              // The VSCode JS lang freaks out if it sees `?.` inlined below.
+              const objId = linkInst?.semLocalObjId;
+              content += `<br>${name}: ${objId}`;
             }
           }
         }
@@ -1232,9 +1316,147 @@ class Analyzer {
         });
       }
     }
+  }
 
-    // XXX it seems like we may need to reorder the groups to get the hierarchy
-    // to show up correctly?
+  /**
+   * Render the object hierarchy for the semantic types at the given moment in
+   * time.
+   *
+   * Our implementation approach is straightforward:
+   * - Process the instance maps, only caring about instances that are alive at
+   *   the target moment.
+   * - Idempotently create a HierNode for each such instance.
+   * - For each instance that was not previously known:
+   *   - Walk the identityLinks, filtering so that we only pay attention to
+   *     semTypes that were explicitly listed.
+   *     - Concept links are added as labels for now.  In the future they may
+   *       alternately be used for color-coding or for clustering.
+   *     - Non-concept identity links are recursively processed into HierNodes.
+   */
+  renderSemTypeInstancesToDot(rootSemTypes, validSemTypes, moment) {
+    // NB: This data structure is currently more of an artifact for debugging
+    // purposes than something we need, as we process instances as we see them.
+    const semTypeToLiveInstanceMap = new Map();
+
+    // ## Graph logic that probably should be in a HierBuilder sub-class.
+    //
+    const builder = new HierBuilder();
+    const rootNode = builder.root;
+    const instToNodeMap = new Map();
+
+    const traverseInstance = (semType, semInst) => {
+      // Nothing to do if the instance has already (started being) traversed.
+      let node;
+      node = instToNodeMap.get(semInst);
+      if (node) {
+        return node;
+      }
+
+      // (The local obj id could perhaps be directly used since the memory can
+      // only be booked to a single type at a given point in time.)
+      const uniqueName = `${semType}:${semInst.semLocalObjId}`;
+      node = rootNode.getOrCreateKid(uniqueName, uniqueName);
+
+      instToNodeMap.set(semInst, node);
+
+      // Let concepts clobber our dumb semLocalObjId display value.
+      let explicitDisplayParts = [];
+      for (const [linkType, linkValue] of Object.entries(semInst.identityLinks)) {
+        // Ignore links of types that we haven't been told about.
+        if (validSemTypes && !validSemTypes.has(linkType)) {
+          continue;
+        }
+
+        // Ignore links that are null.
+        if (!linkValue) {
+          continue;
+        }
+
+        if (linkValue.isConcept) {
+          // TODO: in the future, maybe we should be inducing creation of a
+          // record here?  Although this might just merit a custom graphviz
+          // mapping instead of getting into the automagic stuff from
+          // HierBuilder.
+          explicitDisplayParts.push(`${linkType}: ${linkValue.name}`);
+        }
+        else {
+          const otherNode = traverseInstance(linkType, linkValue);
+          // NB: This will always be the root node for now, but that will change
+          // when we start getting into hierarchy.
+          const ancestorNode = HierNode.findCommonAncestor(node, otherNode);
+          if (ancestorNode) {
+            // Point along the identity link, which means from children to
+            // parents.
+            ancestorNode.edges.push({
+              from: node,
+              to: otherNode,
+              style: 'solid',
+            });
+          }
+        }
+      }
+
+      if (explicitDisplayParts.length) {
+        // XXX this will fall down I think in labels where these will need to be
+        // a <br> I think.
+        node.displayName += '\\n' + explicitDisplayParts.join('\\n');
+      }
+
+      return node;
+    }
+
+    // ## semType filtered processing
+    for (const semType of rootSemTypes) {
+      // Note: This effectively filters out concept instances, which is fine
+      // because we only want them processed as attributes, rather than being
+      // their own nodes.
+      const instanceMap = this.semTypeToInstanceMap.get(semType);
+      if (!instanceMap) {
+        continue;
+      }
+
+      const liveInstances = [];
+
+      const liveInfo = {
+        liveInstances
+      };
+      semTypeToLiveInstanceMap.set(semType, liveInstances);
+
+      for (const [pidPtr, instList] of instanceMap) {
+        // Find the instance that was most recently live, but which might not
+        // be live anymore.  (This is what we do in `_getSemTypeInstance` too,
+        // but there we don't care whether the instance is still alive.)
+        const idxLE = bounds.le(
+          instList, moment,
+          (a, _moment) => cmpMoment(a.constructionMoment, _moment));
+        if (idxLE === -1) {
+          // There was never a live instance yet for the target moment.
+          continue;
+        }
+        const maybeInst = instList[idxLE];
+        // If the moment is after the destruction (cmps to +1), then skip.
+        if  (!maybeInst.destructionMoment) {
+          // If there's no destruction moment, we're good!
+        }
+        else if (cmpMoment(moment, maybeInst.destructionMoment) > 0) {
+          continue;
+        }
+        // The instance is alive!  Use it!
+        liveInstances.push(maybeInst);
+        traverseInstance(semType, maybeInst);
+      }
+    }
+
+    console.log(
+      "rendering state info",
+      {
+        semTypeToLiveInstanceMap,
+        builder,
+      });
+
+    builder.determineNodeActions();
+
+    return builder.renderToDot();
   }
 }
 

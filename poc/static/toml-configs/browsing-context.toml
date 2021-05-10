@@ -3,6 +3,20 @@ namespace.prefix = "mozilla::dom::"
 [class."BrowsingContext"]
 semType = "browsingContext"
 lifecycle = true
-[class."DocumentLoadListener".identity]
-parentWindow.eval = "mParentWindow.mRawPtr"
+# We sample at constructor time from arguments
+identityMethod = "constructor"
+[class."BrowsingContext".identity]
+#browsingContext.eval = "mParentWindow.mRawPtr"
+# And we can just pull this out of the arguments.
+windowContext.arg = "aParentWindow"
+
+[class."WindowContext"]
+semType = "windowContext"
+lifecycle = true
+# We sample at constructor time from arguments
+identityMethod = "constructor"
+[class."WindowContext".identity]
+#browsingContext.eval = "mParentWindow.mRawPtr"
+# And we can just pull this out of the arguments.
+browsingContext.arg = "aBrowsingContext"
 

@@ -12,6 +12,8 @@ import { grokPML, grokPMLRows } from './pmlgrok/grokker.js';
 
 console.log('app js loaded');
 
+let gMoment;
+
 let gNextReqId = 1;
 let client = new BridgeClient({
   onStatusReport(statusReport) {
@@ -26,6 +28,8 @@ let client = new BridgeClient({
     if (statusReport.focus) {
       const moment = statusReport.focus.moment;
       statusElem.textContent = `Event: ${moment.event} Instr: ${moment.instr}`;
+
+      gMoment = moment;
 
       if (gTimelineSeek) {
         gTimelineSeek(moment);
@@ -812,8 +816,9 @@ async function runAnalyzer() {
   eStatus.textContent = '';
 
   const analyzer = gAnalyzer = await loadAnalyzer([
-    'toml-configs/sw-lifecycle.toml',
-    'toml-configs/document-channel.toml'
+    //'toml-configs/sw-lifecycle.toml',
+    //'toml-configs/document-channel.toml'
+    'toml-configs/browsing-context.toml'
   ]);
   // The results are currently just the aggregation of all the underlying
   // queries.
@@ -831,7 +836,24 @@ async function runAnalyzer() {
 }
 
 async function runVisualizer() {
-  graphviz('#output-content', {}).renderDot('digraph  {a -> b}');
+  if (gAnalyzer) {
+    const dotSrc = gAnalyzer.renderSemTypeInstancesToDot(
+      // Root sem types
+      new Set([
+        /*
+        'interceptedChannel',
+        'loadListener',
+        'docChannelParent',
+        */
+        'browsingContext'
+      ]),
+      // Valid sem types: set to null now to just treat all traversed edges from
+      // the roots as fine.
+      null,
+      gMoment);
+    console.log("Rendering dot:", { gMoment, dotSrc });
+    graphviz('#output-content', {}).renderDot(dotSrc);
+  }
 }
 
 let gLastFocus = null;
