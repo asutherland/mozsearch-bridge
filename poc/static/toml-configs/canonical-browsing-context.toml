@@ -1,0 +1,18 @@
+namespace.prefix = "mozilla::dom::"
+
+[class."CanonicalBrowsingContext"]
+semType = "canonicalBrowsingContext"
+lifecycle = true
+identityMethod = "constructor"
+[class."CanonicalBrowsingContext".identity]
+windowGlobalParent.arg = "aParentWindow"
+
+[trace."CanonicalBrowsingContext::SetCurrentRemoteURI".state]
+uri.eval = "aCurrentRemoteURI->mSpec"
+
+[class."WindowGlobalParent"]
+semType = "windowGlobalParent"
+lifecycle = true
+identityMethod = "constructor"
+[class."WindowGlobalParent".identity]
+canonicalBrowsingContext.arg = "aBrowsingContext"

@@ -818,7 +818,8 @@ async function runAnalyzer() {
   const analyzer = gAnalyzer = await loadAnalyzer([
     //'toml-configs/sw-lifecycle.toml',
     //'toml-configs/document-channel.toml'
-    'toml-configs/browsing-context.toml'
+    //'toml-configs/browsing-context.toml',
+    'toml-configs/canonical-browsing-context.toml',
   ]);
   // The results are currently just the aggregation of all the underlying
   // queries.
@@ -845,7 +846,9 @@ async function runVisualizer() {
         'loadListener',
         'docChannelParent',
         */
-        'browsingContext'
+        // 'browsingContext',
+        'canonicalBrowsingContext',
+        'windowGlobalParent',
       ]),
       // Valid sem types: set to null now to just treat all traversed edges from
       // the roots as fine.

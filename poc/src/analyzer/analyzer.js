@@ -291,6 +291,7 @@ class AnalyzerConfig {
           classInfo.stateDefs.push({
             name,
             eval: capInfo.eval,
+            arg: capInfo.arg,
           });
         }
       }
@@ -302,6 +303,7 @@ class AnalyzerConfig {
           classInfo.identityDefs.push({
             name: 'this',
             eval: 'this',
+            arg: undefined,
           });
         }
         for (const [name, capInfo] of Object.entries(rawInfo.identity)) {
@@ -340,6 +342,18 @@ class AnalyzerConfig {
           captureDefs.push({
             name,
             eval: capInfo.eval,
+            arg: capInfo.arg,
+          });
+        }
+      }
+
+      let stateDefs;
+      if (rawInfo.state) {
+        for (const [name, capInfo] of Object.entries(rawInfo.state)) {
+          classInfo.stateDefs.push({
+            name,
+            eval: capInfo.eval,
+            arg: capInfo.arg,
           });
         }
       }
@@ -349,6 +363,7 @@ class AnalyzerConfig {
         mode: 'trace',
         classInfo,
         captureDefs,
+        stateDefs,
       });
     }
   }
@@ -488,7 +503,7 @@ class Analyzer {
   async _doTrace(traceDef, pass = 'initial', queryParams) {
     const { symName, classInfo } = traceDef;
 
-    let stateDefs = null;
+    let stateDefs = traceDef.stateDefs ? traceDef.stateDefs.concat() : null;
     let identityDefs = null;
     function walkClassInfo(ci) {
       if (!ci) {
@@ -523,17 +538,29 @@ class Analyzer {
     const argSources = [];
 
     if (traceDef.captureDefs) {
-      for (const capDef of traceDef.captureDefs) {
-        printParts.push(capDef.eval);
-        printNames.push(capDef.name);
-        printSources.push('capture');
+      for (const def of traceDef.captureDefs) {
+        if (def.arg) {
+          argLookups.push(def.arg);
+          argNames.push(def.name);
+          argSources.push('capture');
+        } else {
+          printParts.push(def.eval);
+          printNames.push(def.name);
+          printSources.push('capture');
+        }
       }
     }
     if (stateDefs) {
       for (const def of stateDefs) {
-        printParts.push(`this->${def.eval}`);
-        printNames.push(def.name);
-        printSources.push('classState');
+        if (def.arg) {
+          argLookups.push(def.arg);
+          argNames.push(def.name);
+          argSources.push('classState');
+        } else {
+          printParts.push(def.eval);
+          printNames.push(def.name);
+          printSources.push('classState');
+        }
       }
     }
     // If this is a class that has its lifecycle tracked, then there's no need
@@ -822,6 +849,11 @@ class Analyzer {
             // Identity extracted values
             rawIdentity: {},
             identityLinks: {},
+            // State as captured from trace definitions, with the first value
+            // written here winning.  In general, we expect states to
+            // potentially change over time, so we will need some kind of
+            // mapping from the instance here to all traces that have any state.
+            firstStates: {},
           };
           instList.push(inst);
 
@@ -1002,6 +1034,31 @@ class Analyzer {
           const linkInst = this._getSemTypeInstance(
             classInfo.semType, thisPidPtr, exec.call.meta.entryMoment);
           exec.identityLinks[classInfo.semType] = linkInst;
+
+          // XXX In Flux: Propagate state up to the instance as relevant.
+          //
+          // For now, we:
+          // - Latch the first observed value for a given "state" on the
+          //   `firstStates` of a given instance.
+          // - Do not do any object graph stuff at this time, assuming these
+          //   will all be primitives or strings.
+          if (linkInst && exec.data.classState) {
+            // XXX this is stolen from the identity mechanism below and should
+            // probably be factored into a helper.
+            for (const [name, printed] of Object.entries(exec.data.classState)) {
+              let rawVal = printed?.value?.data;
+              let val;
+              if (rawVal && rawVal.startsWith('0x')) {
+                val = makePidPtr(exec.call.meta.pid, rawVal);
+              } else {
+                val = rawVal;
+              }
+
+              if (!(name in linkInst.firstStates)) {
+                linkInst.firstStates[name] = val;
+              }
+            }
+          }
         } else if (exec.data?.identity) {
           // XXX This logic is a mash-up from _deriveInstances and the above
           // and might benefit from refactoring for reuse, also maybe not.
@@ -1394,6 +1451,10 @@ class Analyzer {
             });
           }
         }
+      }
+
+      for (const [name, value] of Object.entries(semInst.firstStates)) {
+        explicitDisplayParts.push(`${name}: ${value}`);
       }
 
       if (explicitDisplayParts.length) {
