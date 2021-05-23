@@ -35,6 +35,16 @@ function makePidPtrUsingFocusInfo(focusInfo, ptr) {
 }
 
 function cmpMoment(a, b) {
+  if (!a || !b) {
+    if (b) {
+      return 1;
+    }
+    if (a) {
+      return -1;
+    }
+    return 0;
+  }
+
   if (a.event < b.event) {
     return -1;
   }
@@ -1042,7 +1052,7 @@ class Analyzer {
           //   `firstStates` of a given instance.
           // - Do not do any object graph stuff at this time, assuming these
           //   will all be primitives or strings.
-          if (linkInst && exec.data.classState) {
+          if (linkInst && exec.data?.classState) {
             // XXX this is stolen from the identity mechanism below and should
             // probably be factored into a helper.
             for (const [name, printed] of Object.entries(exec.data.classState)) {
@@ -1246,6 +1256,9 @@ class Analyzer {
           treeLevel,
           parentGroupId,
           earliestSeqId: startSeqId,
+          extra: {
+            inst,
+          },
         };
         groupMap.set(inst.semLocalObjId, group);
         groups.add(group);
@@ -1270,6 +1283,15 @@ class Analyzer {
             start: startSeqId,
             end: endSeqId,
             type: 'background',
+            // Note: We will end up getting a click event that identifies this
+            // lifetime as "background" but won't resolve to this item, and so
+            // we put the `extra: { inst }` on the group which we will be told
+            // about, but we could potentially change up the click handling to
+            // directly reference this item... either through extra click
+            // resolving (maybe) or just making this not type=background and
+            // just altering the styling of the range.  Note that this will
+            // allow us to change from a "click" handler to using the existing
+            // "select" handler in that case.
           });
         }
       } else {

@@ -517,6 +517,17 @@ function renderTimeline(container, doStack=true, groupOrder) {
       customTime = client.statusReport.focus.moment.event;
     }
     gTimeline.addCustomTime(customTime, "focus");
+    gTimeline.on('click', (info) => {
+      // Make us seek to the construction moment of the lifetime.
+      //
+      // Consider: check whether we're closer to the start/end and pick the
+      // destruction moment if closer to the end.
+      if (info.what === "background" && info.group) {
+        const group = gTimelineGroups.get(info.group);
+        console.log('BACKGROUND GROUP', group);
+        client.setFocus(group.extra.inst.constructorExec.call.meta.focusInfo);
+      }
+    });
     gTimeline.on('select', ({items, event}) => {
       if (items.length !== 1) {
         return;
@@ -816,10 +827,10 @@ async function runAnalyzer() {
   eStatus.textContent = '';
 
   const analyzer = gAnalyzer = await loadAnalyzer([
-    //'toml-configs/sw-lifecycle.toml',
-    //'toml-configs/document-channel.toml'
+    'toml-configs/sw-lifecycle.toml',
+    'toml-configs/document-channel.toml'
     //'toml-configs/browsing-context.toml',
-    'toml-configs/canonical-browsing-context.toml',
+    //'toml-configs/canonical-browsing-context.toml',
   ]);
   // The results are currently just the aggregation of all the underlying
   // queries.
@@ -841,14 +852,14 @@ async function runVisualizer() {
     const dotSrc = gAnalyzer.renderSemTypeInstancesToDot(
       // Root sem types
       new Set([
-        /*
+
         'interceptedChannel',
         'loadListener',
         'docChannelParent',
-        */
+
         // 'browsingContext',
-        'canonicalBrowsingContext',
-        'windowGlobalParent',
+        //'canonicalBrowsingContext',
+        //'windowGlobalParent',
       ]),
       // Valid sem types: set to null now to just treat all traversed edges from
       // the roots as fine.
