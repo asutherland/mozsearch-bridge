@@ -119,7 +119,10 @@ class GrokContext {
 
   /**
    * Return true if the PML node seems to have 2 object nodes with the provided
-   * string literal between them serving as a splitting delimiter.
+   * string literal between them serving as a splitting delimiter.  Note that
+   * there's now a case for "=" delimited things where they may be structured
+   * as [[left, "="], right], in which case `hasPairDelimShapes` is the thing to
+   * use.
    */
   hasPairDelim(pml, delim) {
     if (!pml || !pml.c) {
@@ -151,6 +154,14 @@ class GrokContext {
     }
 
     return delim;
+  }
+
+  /**
+   * Check if `splitPairDelimShapes` would succeed.
+   */
+  hasPairDelimShapes(pml, delim=null) {
+    const info = this.splitPairDelimShapes(pml, delim);
+    return info ? info.delim !== null : false;
   }
 
   /**
@@ -238,8 +249,8 @@ class GrokContext {
     return (firstChild === opens) && (lastChild === closes);
   }
 
-  runGrokkerOnNode(grokker, node) {
-    this.stack.push({ grokker, node });
+  runGrokkerOnNode(grokker, node, position=undefined) {
+    this.stack.push({ grokker, node, position });
     const result = grokker(node, this);
     if (this.verbose) {
       this.log("Got", result, "from grokker", grokker, "on", node);
@@ -268,6 +279,7 @@ class GrokContext {
    * character.
    */
   parsify(pml, allHandlers) {
+    this.stack.push({ parsify: allHandlers, node: pml });
     let resultObj = {};
 
     let iHandler = 0;
@@ -353,7 +365,7 @@ class GrokContext {
       if (expectingHandlerDelim) {
         this.warn(
           "Was expecting some kind of delimiter but got", node, "in",
-          allHandlers);
+          allHandlers, "at index", iNode, "of", children);
         break;
       }
 
@@ -368,18 +380,19 @@ class GrokContext {
             flattenCurrentNode();
           }
         }
-        curValue.push(this.runGrokkerOnNode(handler.grokker, node));
+        curValue.push(this.runGrokkerOnNode(handler.grokker, node, `${handler.name}@${iNode}`));
         // We don't advance but we do mark that we processed something and are
         // now expecting a delimiter.
         handlerProcessed++;
         expectingHandlerDelim = true;
       } else {
         // If the thing can't recur, advance.
-        resultObj[handler.name] = this.runGrokkerOnNode(handler.grokker, node);
+        resultObj[handler.name] = this.runGrokkerOnNode(handler.grokker, node, `${handler.name}@${iNode}`);
         advanceHandler();
       }
     }
 
+    this.stack.pop();
     return resultObj;
   }
 
@@ -422,11 +435,11 @@ class GrokContext {
     // entry in the list and the comma-delimited list is elided.  In that case,
     // when the wrapper config indicates it, we can directly pierce to only
     // invoke the (single handler).
-    else if (wrapper.pierceIfDelimIs && kid.c.length === 3 &&
-             this.hasPairDelim(kid, wrapper.pierceIfDelimIs) &&
+    else if (wrapper.pierceIfDelimIs &&
+             this.hasPairDelimShapes(kid, wrapper.pierceIfDelimIs) &&
              allHandlers.length === 1) {
       const handler = allHandlers[0];
-      const soleValue = this.runGrokkerOnNode(handler.grokker, kid);
+      const soleValue = this.runGrokkerOnNode(handler.grokker, kid, "pierced");
       return {
         [handler.name]: [soleValue]
       };
@@ -448,17 +461,17 @@ class GrokContext {
 function grokProducer(val, ctx) {
   let grokker, subval;
   if (val.dwarfVariable) {
-    return ctx.runGrokkerOnNode(grokProducerDwarfVariable, val.dwarfVariable);
+    return ctx.runGrokkerOnNode(grokProducerDwarfVariable, val.dwarfVariable, "dwarfVariable");
   } else if (val.subrange) {
-    return ctx.runGrokkerOnNode(grokProducerSubrange, val.subrange);
+    return ctx.runGrokkerOnNode(grokProducerSubrange, val.subrange, "subrange");
   } else if (val.memory) {
-    return ctx.runGrokkerOnNode(grokProducerMemory, val.memory);
+    return ctx.runGrokkerOnNode(grokProducerMemory, val.memory, "memory");
   } else if (val.dereference) {
-    return ctx.runGrokkerOnNode(grokProducerDereference, val.dereference);
+    return ctx.runGrokkerOnNode(grokProducerDereference, val.dereference, "dereference");
   } else if (val.returnValue) {
-    return ctx.runGrokkerOnNode(grokProducerReturnValue, val.returnValue);
+    return ctx.runGrokkerOnNode(grokProducerReturnValue, val.returnValue, "returnValue");
   } else if (val.literal) {
-    return ctx.runGrokkerOnNode(grokProducerLiteral, val.literal);
+    return ctx.runGrokkerOnNode(grokProducerLiteral, val.literal, "literal");
   } else {
     console.warn("Unable to find appropriate producer grokker", val);
     return null;
@@ -592,7 +605,7 @@ function grokRendererPointer(val, ctx) {
 function grokObject(pml, ctx) {
   // At least in the superclass case, it's possible that if the superclass only
   // has a single attribute, that we won't end up with the comma nesting level
-  // and instead will only have the
+  // and instead will only have the values.
 
   return ctx.unwrapAndParsify(
     pml,
@@ -616,11 +629,11 @@ function grokObjectKeyAndValue(pml, ctx) {
   // It seems like objects can also have nested objects, presumably due to
   // superclass fields.  So if that's the case, just call grokObject again.
   if (ctx.hasWrappingDelims(pml, "{", "}")) {
-    return grokObject(pml, ctx);
+    return ctx.runGrokkerOnNode(grokObject, pml, "wrapped");
   }
 
   // TODO: maybe this wants more special handling than the function logic
-  return grokFunctionArg(pml, ctx);
+  return ctx.runGrokkerOnNode(grokFunctionArg, pml, "not-wrapped");
 }
 
 function grokValue(pml, ctx) {
@@ -642,8 +655,8 @@ function grokValue(pml, ctx) {
   let producer;
   let renderer;
   if (pml.a && pml.a.data) {
-    producer = ctx.runGrokkerOnNode(grokProducer, pml.a.data.producer);
-    renderer = ctx.runGrokkerOnNode(grokRenderer, pml.a.data.renderer);
+    producer = ctx.runGrokkerOnNode(grokProducer, pml.a.data.producer, "producer");
+    renderer = ctx.runGrokkerOnNode(grokRenderer, pml.a.data.renderer, "renderer");
   }
 
   return {
@@ -669,7 +682,7 @@ function grokPrinted(pml, ctx) {
 
   return {
     name: producerSubrange ? producerSubrange.name : "???",
-    value: ctx.runGrokkerOnNode(grokValue, pml.c[0]),
+    value: ctx.runGrokkerOnNode(grokValue, pml.c[0], "printed"),
   };
 }
 
@@ -699,14 +712,14 @@ function grokIdent(pml, ctx) {
 function grokCompoundIdent(pml, ctx) {
   // Handle this actually being a simple ident.  We're t=inline if complex.
   if (ctx.isIdent(pml)) {
-    return ctx.runGrokkerOnNode(grokIdent, pml);
+    return ctx.runGrokkerOnNode(grokIdent, pml, "ident");
   }
 
   function processIdent(piecePml) {
     if (ctx.isIdent(piecePml)) {
-      return ctx.runGrokkerOnNode(grokIdent, piecePml);
+      return ctx.runGrokkerOnNode(grokIdent, piecePml, "ident-simple");
     } else {
-      return ctx.runGrokkerOnNode(grokCompoundIdent, piecePml);
+      return ctx.runGrokkerOnNode(grokCompoundIdent, piecePml, "ident-compound");
     }
   }
 
@@ -736,7 +749,7 @@ function grokCompoundIdent(pml, ctx) {
     // It's possible this case should actually be handled by grokFunctionArgName
     // more directly.
     let left = processIdent(pml.c[0]);
-    let right = ctx.runGrokkerOnNode(grokValue, pml.c[2]);
+    let right = ctx.runGrokkerOnNode(grokValue, pml.c[2], "@right");
 
     return {
       name: left.name,
@@ -747,7 +760,7 @@ function grokCompoundIdent(pml, ctx) {
   if (ctx.isArraySubscripting(pml)) {
     // We just generally recurse for this.
     const wrapped = pml.c[0];
-    const subscripted = ctx.runGrokkerOnNode(grokCompoundIdent, wrapped);
+    const subscripted = ctx.runGrokkerOnNode(grokCompoundIdent, wrapped, "subscripted");
     subscripted.subscript = pml.c[1];
     return subscripted;
   }
@@ -777,7 +790,7 @@ function grokFunctionArgName(pml, ctx) {
   // ## Simple Case: Just an ident
   if (ctx.isIdent(pml)) {
     return {
-      ident: ctx.runGrokkerOnNode(grokIdent, pml),
+      ident: ctx.runGrokkerOnNode(grokIdent, pml, "ident"),
       value: undefined,
     };
   }
@@ -812,7 +825,7 @@ function grokFunctionArgName(pml, ctx) {
   // ## "." delimited indicating a compound ident
   if (ctx.isInline(pml) && ctx.hasPairDelim(pml, ".")) {
     return {
-      ident: ctx.runGrokkerOnNode(grokCompoundIdent, pml),
+      ident: ctx.runGrokkerOnNode(grokCompoundIdent, pml, "ident-compound"),
       value: undefined,
     };
   }
@@ -820,8 +833,8 @@ function grokFunctionArgName(pml, ctx) {
   if (ctx.isInline(pml) && ctx.hasPairDelim(pml, "@")) {
     return {
       // This could be a simple ident or ?maybe? a compound ident
-      ident: ctx.runGrokkerOnNode(grokCompoundIdent, pml.c[0]),
-      value: ctx.runGrokkerOnNode(grokValue, pml.c[2]),
+      ident: ctx.runGrokkerOnNode(grokCompoundIdent, pml.c[0], "ident@0"),
+      value: ctx.runGrokkerOnNode(grokValue, pml.c[2], "value@2"),
     };
   }
 
@@ -829,7 +842,7 @@ function grokFunctionArgName(pml, ctx) {
   if (ctx.isArraySubscripting(pml)) {
     // We just generally recurse for this.
     const wrapped = pml.c[0];
-    const subscripted = ctx.runGrokkerOnNode(grokFunctionArgName, wrapped);
+    const subscripted = ctx.runGrokkerOnNode(grokFunctionArgName, wrapped, "subscripted@0");
     subscripted.subscript = pml.c[1];
     return subscripted;
   }
@@ -854,12 +867,12 @@ function grokFunctionArgValue(pml, ctx) {
   if (ctx.hasWrappingDelims(pml, "{", "}")) {
     return {
       value: undefined,
-      pretty: ctx.runGrokkerOnNode(grokObject, pml),
+      pretty: ctx.runGrokkerOnNode(grokObject, pml, "wrapped"),
     };
   }
 
   return {
-    value: ctx.runGrokkerOnNode(grokValue, pml),
+    value: ctx.runGrokkerOnNode(grokValue, pml, "unwrapped"),
     pretty: undefined,
   };
 }
@@ -889,8 +902,8 @@ function grokFunctionArg(pml, ctx) {
   // Because of the complex situation where the name can end up including the
   // memory location of the object-printed right, we need to post-process the
   // results of the more straightforward grokking.
-  const namish = ctx.runGrokkerOnNode(grokFunctionArgName, left);
-  const valueish = ctx.runGrokkerOnNode(grokFunctionArgValue, right);
+  const namish = ctx.runGrokkerOnNode(grokFunctionArgName, left, "left");
+  const valueish = ctx.runGrokkerOnNode(grokFunctionArgValue, right, "right");
 
   return {
     ident: namish.ident,
@@ -1012,7 +1025,7 @@ function grokRootPML(pml, mode, results, focus) {
     }*/
 
     let result;
-    result = ctx.runGrokkerOnNode(grokFunctionArg, pml);
+    result = ctx.runGrokkerOnNode(grokFunctionArg, pml, "root-evaluate");
     results.push(result);
     return
   }
@@ -1131,7 +1144,7 @@ function grokRootPML(pml, mode, results, focus) {
         },
       ]);
   } else {
-    result = ctx.runGrokkerOnNode(grokItemTypeFunction, canonChild);
+    result = ctx.runGrokkerOnNode(grokItemTypeFunction, canonChild, "root-not-printwrapped");
   }
 
   results.push(result);
