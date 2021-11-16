@@ -100,6 +100,24 @@ class GrokContext {
   }
 
   /**
+   * Helper to check if we're looking at a t=inline that is a delimited list.
+   * This will return false on the ambiguous case where it could be a single
+   * entry list.  However, in this case, the caller may not care as long as the
+   * extra layer of wrapping doesn't pose a problem.
+   */
+  seemsDelimitedWith(pml, delim) {
+    if (!pml || pml.t !== "inline" || !pml.c || pml.c.length < 3) {
+      return false;
+    }
+    for (let i = 1; i < pml.length; i += 2) {
+      if (pml.c[i]?.trim() !== delim) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
    * Return true if the PML node seems to have 2 object nodes with the provided
    * string literal between them serving as a splitting delimiter.
    */
@@ -111,7 +129,7 @@ class GrokContext {
       return false;
     }
 
-    return pml.c[1] === delim;
+    return pml.c[1]?.trim() === delim;
   }
 
   /**
@@ -133,6 +151,43 @@ class GrokContext {
     }
 
     return delim;
+  }
+
+  /**
+   * Given a [left, delim, right] or [[left, delim], right] shape, return
+   * { left, delim, right } with non-null values on match and null values on
+   * non-match.
+   */
+  splitPairDelimShapes(pml, delim=null) {
+    const result = {
+      left: null,
+      delim: null,
+      right: null,
+    };
+    if (!pml || !pml.c) {
+      return result;
+    }
+    if (pml.c.length === 3) {
+      if (typeof(pml.c[1]) !== "string" ||
+          (delim && pml.c[1]?.trim() !== delim)) {
+        return result;
+      }
+      result.left = pml.c[0];
+      result.delim = pml.c[1];
+      result.right = pml.c[2];
+      return result;
+    }
+    if (pml.c.length !== 2 ||
+        pml.c[0].t !== "inline" ||
+        pml.c[0].c?.length !== 2 ||
+        typeof(pml.c[0].c?.[1]) !== "string" ||
+        (delim && pml.c[0].c?.[1]?.trim() !== delim)) {
+      return result;
+    }
+    result.left = pml.c[0].c[0];
+    result.delim = pml.c[0].c[1];
+    result.right = pml.c[1];
+    return result;
   }
 
   /**
@@ -229,9 +284,17 @@ class GrokContext {
     if (this.verbose) {
       this.log("parsifying node", pml);
     }
-    let iNode = -1;
-    for (let node of pml.c) {
-      iNode++;
+    // duplicate the list of children so that we can flatten nodes like argument
+    // lists which now seem to get wrapped into their own t=inline container.
+    const children = pml.c.concat();
+    let node = null, iNode;
+    const flattenCurrentNode = () => {
+      // We replace the current node with its children.
+      children.splice(iNode, 1, ...node.c);
+      node = children[iNode];
+    }
+    for (iNode = 0; iNode < children.length; iNode++) {
+      node = children[iNode];
       let handler = allHandlers[iHandler];
       let nextHandler;
       if (iHandler + 1 < allHandlers.length) {
@@ -297,6 +360,13 @@ class GrokContext {
       if (handler.repeatDelim) {
         if (handlerProcessed === 0) {
           curValue = resultObj[handler.name] = [];
+          // Flatten the child node into our current traversal if it looks like
+          // the contents that previously would have been flattened have been
+          // instead placed into their own t=inline that includes the delimiter.
+          if (handler.maybeFlatten &&
+              this.seemsDelimitedWith(node, handler.repeatDelim)) {
+            flattenCurrentNode();
+          }
         }
         curValue.push(this.runGrokkerOnNode(handler.grokker, node));
         // We don't advance but we do mark that we processed something and are
@@ -702,7 +772,6 @@ function grokCompoundIdent(pml, ctx) {
  *       -  t=ident "mValue"
  *     - "="
  *     - t=inline (blue), "{"/"}" wrapped, t=inline comma-delimited "="-split
- *
  */
 function grokFunctionArgName(pml, ctx) {
   // ## Simple Case: Just an ident
@@ -765,7 +834,7 @@ function grokFunctionArgName(pml, ctx) {
     return subscripted;
   }
 
-  console.warn("Unknown function argument name format", pml);
+  ctx.warn("Unknown function argument name format", pml);
   return null;
 }
 
@@ -806,15 +875,16 @@ function grokFunctionArgValue(pml, ctx) {
  * In more complex cases where the right-hand side is an object and pernosco
  * has enough info to pretty print that, both of those things get folded into
  * the left like [[t=ident, "@", t=number], "=", OBJ]
+ *
+ * There's now a variant where insetad of [left, "=", right] we end up with
+ * [[left, "="], right].  Presumably this is done to bias the line-wrapping
+ * behavior.
  */
 function grokFunctionArg(pml, ctx) {
-  const delim = ctx.getPairDelim(pml);
+  const { left, delim, right } = ctx.splitPairDelimShapes(pml);
   if (!delim) {
     return null;
   }
-
-  const left = pml.c[0];
-  const right = pml.c[2];
 
   // Because of the complex situation where the name can end up including the
   // memory location of the object-printed right, we need to post-process the
@@ -842,6 +912,7 @@ function grokItemTypeFunction(pml, ctx) {
         name: "args",
         grokker: grokFunctionArg,
         repeatDelim: ",",
+        maybeFlatten: true,
       },
       ")",
       "=",
@@ -920,6 +991,7 @@ function findItemType(pml) {
  * TODO: Things will get more complicated when print expressions get involved.
  */
 function grokRootPML(pml, mode, results, focus) {
+  window.LAST_ROOT_PML = pml;
   const ctx = new GrokContext();
 
   // XXX I think this was still being speculatively played with previously and
