@@ -105,13 +105,34 @@ class GrokContext {
    * entry list.  However, in this case, the caller may not care as long as the
    * extra layer of wrapping doesn't pose a problem.
    */
-  seemsDelimitedWith(pml, delim) {
+  seemsDelimitedWith(pml, delim, allowRepeatedDelim) {
     if (!pml || pml.t !== "inline" || !pml.c || pml.c.length < 3) {
       return false;
     }
-    for (let i = 1; i < pml.length; i += 2) {
-      if (pml.c[i]?.trim() !== delim) {
-        return false;
+    if (allowRepeatedDelim) {
+      // We assume that there needs to be some content for the first node, so
+      // we skip it and then scan.  We require any strings we see to be the
+      // (possibly whitespace-padded) delimiter, and that if we see an actual
+      // non-delimiter, that it has to be followed by a delimiter.
+      let nonStringAllowed = false;
+      for (let i = 1; i < pml.length; i++) {
+        let node = pml.c[i];
+        if (typeof(node) === "string") {
+          if (node.trim() !== delim) {
+            return false;
+          }
+          nonStringAllowed = true;
+        } else if (nonStringAllowed) {
+          nonStringAllowed = false;
+        } else {
+          return false;
+        }
+      }
+    } else {
+      for (let i = 1; i < pml.length; i += 2) {
+        if (pml.c[i]?.trim() !== delim) {
+          return false;
+        }
       }
     }
     return true;
@@ -348,7 +369,10 @@ class GrokContext {
         // - The (already-used once) current handler's `repeatDelim` delimiter
         //   which is expecting a delimiter and so we should next expect to
         //   fire the handler for the next node.
-        if (expectingHandlerDelim) {
+        // - Introducing `allowRepeatedDelim` because of a weird case where we
+        //   seem to sometimes see multiple commas at deep nesting levels,
+        //   presumably due to some depth-limiting heuristic?
+        if (expectingHandlerDelim || handler.allowRepeatedDelim) {
           if (handler.repeatDelim === node) {
             expectingHandlerDelim = false;
             continue;
@@ -376,7 +400,8 @@ class GrokContext {
           // the contents that previously would have been flattened have been
           // instead placed into their own t=inline that includes the delimiter.
           if (handler.maybeFlatten &&
-              this.seemsDelimitedWith(node, handler.repeatDelim)) {
+              this.seemsDelimitedWith(node, handler.repeatDelim,
+                                      handler.allowRepeatedDelim)) {
             flattenCurrentNode();
           }
         }
@@ -618,7 +643,9 @@ function grokObject(pml, ctx) {
       {
         name: "values",
         grokker: grokObjectKeyAndValue,
-        repeatDelim: ","
+        repeatDelim: ",",
+        // maybeFlatten seems to actively break things if enabled here.
+        allowRepeatedDelim: true,
       }
     ]);
 }
@@ -926,6 +953,7 @@ function grokItemTypeFunction(pml, ctx) {
         grokker: grokFunctionArg,
         repeatDelim: ",",
         maybeFlatten: true,
+        allowRepeatedDelim: true,
       },
       ")",
       "=",
