@@ -1,0 +1,25 @@
+[class."nsGlobalWindowInner"]
+semType = "window"
+lifecycle = true
+identityMethod = "constructor"
+[class."nsGlobalWindowInner".identity]
+outerWindow.arg = "aOuterWindow"
+
+[trace."nsGlobalWindowInner::FreeInnerObjects"]
+
+[class."nsDocumentViewer"]
+semType = "viewer"
+lifecycle = true
+identityMethod = "nsDocumentViewer::LoadStart"
+[class."nsDocumentViewer".identity]
+document.eval = "aDocument"
+
+[trace."nsDocumentViewer::DispatchBeforeUnload"]
+
+[class."mozilla::dom::Document"]
+semType = "document"
+lifecycle = true
+
+[trace."mozilla::dom::Document::SetDocumentURI".capture]
+uri.eval = "aURI->mSpec"
+

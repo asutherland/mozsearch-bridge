@@ -298,6 +298,11 @@ class GrokContext {
    * there are delimiting text nodes that unambigiously indicate a repetition
    * (comma) or a transition to a different rule via some other delimiting
    * character.
+   *
+   * This method does NOT require that it fully consume the list of handlers
+   * before running out of tokens!  So, for example, in a function call where
+   * there could optionally be a return value delimited by a "=" followed by
+   * a value after the closing ")", we don't actually ever need to see the "=".
    */
   parsify(pml, allHandlers) {
     this.stack.push({ parsify: allHandlers, node: pml });
@@ -396,10 +401,13 @@ class GrokContext {
       if (handler.repeatDelim) {
         if (handlerProcessed === 0) {
           curValue = resultObj[handler.name] = [];
+          if (handler.alwaysFlatten && this.isInline(node)) {
+            flattenCurrentNode();
+          }
           // Flatten the child node into our current traversal if it looks like
           // the contents that previously would have been flattened have been
           // instead placed into their own t=inline that includes the delimiter.
-          if (handler.maybeFlatten &&
+          else if (handler.maybeFlatten &&
               this.seemsDelimitedWith(node, handler.repeatDelim,
                                       handler.allowRepeatedDelim)) {
             flattenCurrentNode();
@@ -952,7 +960,10 @@ function grokItemTypeFunction(pml, ctx) {
         name: "args",
         grokker: grokFunctionArg,
         repeatDelim: ",",
-        maybeFlatten: true,
+        // Even single argument arguments seem to be nested in a t=inline.
+        // TODO: This normalization implies that maybe we should just have a
+        // specific argument list parser (which can then use parsify).
+        alwaysFlatten: true,
         allowRepeatedDelim: true,
       },
       ")",
