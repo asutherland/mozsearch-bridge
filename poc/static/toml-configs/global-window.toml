@@ -1,3 +1,4 @@
+# nsGlobalWindowInner
 [class."nsGlobalWindowInner"]
 semType = "window"
 lifecycle = true
@@ -7,19 +8,27 @@ outerWindow.arg = "aOuterWindow"
 
 [trace."nsGlobalWindowInner::FreeInnerObjects"]
 
-[class."nsDocumentViewer"]
-semType = "viewer"
-lifecycle = true
-identityMethod = "nsDocumentViewer::LoadStart"
-[class."nsDocumentViewer".identity]
-document.eval = "aDocument"
-
-[trace."nsDocumentViewer::DispatchBeforeUnload"]
-
+# Document
 [class."mozilla::dom::Document"]
 semType = "document"
 lifecycle = true
 
 [trace."mozilla::dom::Document::SetDocumentURI".capture]
+rawURI.eval = "aURI"
 uri.eval = "aURI->mSpec"
+# Using the helper seems to just return 0xe5 freed memory or 0x00 nul memory,
+# and is wildly slower than just using the above for the same set of useful
+# results.  Maybe a aURI is null in a bunch of cases?
+#uri.eval = "aURI->GetSpecOrDefault()"
 
+# nsDocumentViewer
+[class."nsDocumentViewer"]
+semType = "viewer"
+lifecycle = true
+identityMethod = "nsDocumentViewer::LoadStart"
+# we're just sampling an argument so we don't need to use last-line
+identityMethodMode = "identity-entry"
+[class."nsDocumentViewer".identity]
+document.arg = "aDocument"
+
+[trace."nsDocumentViewer::DispatchBeforeUnload"]

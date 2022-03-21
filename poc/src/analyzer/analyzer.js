@@ -288,7 +288,7 @@ class AnalyzerConfig {
           this.normalizeSymName(rawInfo.identityMethod);
         const identityTraceDef = {
           symName: classInfo.identityMethodSymName,
-          mode: 'last-line',
+          mode: rawInfo.identityMethodMode || 'last-line',
           classInfo,
           capture: null,
         };
@@ -314,6 +314,19 @@ class AnalyzerConfig {
             name: 'this',
             eval: 'this',
             arg: undefined,
+          });
+        }
+        // similarly, we need to know to pull the this out of the implicit arg
+        // for now.  This is because the above results in us calling
+        // `extractThisPtrFromIdentity` instead of `extractThisPtr`.  It's also
+        // perhaps possible in the future we might actually have this identity
+        // sampling happen via an exterior method, in which case it would make
+        // sense for us to be able to use something other than "this" for this.
+        else if (classInfo.identitySamplingTraceDef?.mode === 'identity-entry') {
+          classInfo.identityDefs.push({
+            name: 'this',
+            eval: undefined,
+            arg: 'this',
           });
         }
         for (const [name, capInfo] of Object.entries(rawInfo.identity)) {
@@ -492,7 +505,8 @@ class Analyzer {
       for (const traceDef of config.traceMethods) {
         console.log('Tracing', traceDef.symName, traceDef);
         progressCallback(`Tracing ${traceDef.symName}`, {});
-        await this._doTrace(traceDef);
+        const queryParamsByPass = await this._doTrace(traceDef);
+        console.log('  queryParams by pass were:', queryParamsByPass);
       }
     }
 
@@ -616,6 +630,10 @@ class Analyzer {
     } else {
       queryParams.mixArgs.params.print = print;
     }
+
+    const queryParamsUsed = {
+      [pass]: queryParams,
+    };
 
     // This will be an array of items of the form { items: [ { focus, pml }]}
     const rawResults = await this.client.sendMessageAwaitingReply(
@@ -756,7 +774,7 @@ class Analyzer {
 
             // ## Do the breakpoint query
             if (lineFocus) {
-              await this._doTrace(
+              const nestedQueryParamsUsed = await this._doTrace(
                 traceDef,
                 'last-line',
                 {
@@ -780,6 +798,7 @@ class Analyzer {
                     },
                   },
                 });
+                Object.assign(queryParamsUsed, nestedQueryParamsUsed);
               }
           }
         } else {
@@ -790,6 +809,11 @@ class Analyzer {
         }
         break;
       }
+      case 'identity-entry': {
+        const classResults = this._getOrCreateClassResults(traceDef.classInfo);
+        classResults.identityTraceResults = traceResults;
+        break;
+      }
 
       default: {
         this.traceResultsMap.set(symName, traceResults);
@@ -798,6 +822,8 @@ class Analyzer {
     }
 
     this.allQueryResults.push(...rawResults);
+    // For the benefit of debug logging, indicate what queryParams we used.
+    return queryParamsUsed;
   }
 
   /**
