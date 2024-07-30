@@ -1,0 +1,33 @@
+{
+    "manifest_version": 2,
+    "name": "Mozsearch Bridge",
+    "version": "0.1.0",
+
+    "description": "Use mozsearch based code understanding to interact with pernosco",
+
+    "browser_specific_settings": {
+      "gecko": {
+        "id": "mozsearch-bridge@searchfox.org"
+      }
+    },
+
+    "developer": {
+      "name": "Andrew Sutherland",
+      "url": "https://github.com/asutherland/mozsearch-bridge"
+    },
+  
+    "icons": {
+      "48": "icon-48.png"
+    },
+
+    "background": {
+      "page": "background/index.html"
+    },
+    "permissions": [
+      "menus",
+      "sessions",
+      "tabs",
+      "tabHide",
+      "<all_urls>"
+    ]
+  }

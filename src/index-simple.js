@@ -3,9 +3,6 @@ import { BridgeClient } from './bridge/client.js';
 import { Timeline } from "vis-timeline/peer";
 import { DataSet } from "vis-data/peer";
 
-import { graphviz } from "d3-graphviz";
-import { wasmFolder } from "@hpcc-js/wasm"
-
 import { loadAnalyzer } from './analyzer/analyzer.js';
 
 import { grokPML, grokPMLRows } from './pmlgrok/grokker.js';
@@ -866,8 +863,9 @@ async function runVisualizer() {
       // the roots as fine.
       null,
       gMoment);
-    console.log("Rendering dot:", { gMoment, dotSrc });
-    graphviz('#output-content', {}).renderDot(dotSrc);
+    // Client-side graphviz is currently disabled.
+    console.log("Disabled dot:", { gMoment, dotSrc });
+    //graphviz('#output-content', {}).renderDot(dotSrc);
   }
 }
 
