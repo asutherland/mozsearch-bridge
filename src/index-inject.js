@@ -330,7 +330,7 @@ class ContentScriptServer extends BridgeServer {
     console.log('Setting focus to', focus);
     this.pclient.willSetFocus(this.wrappedBridgeHelperView);
     // TODO: Allow propagating the annotation.
-    this.pclient.setFocus(focus, source, this.wrappedBridgeHelperView, {});
+    this.pclient.setFocus(cloneData(focus), cloneData(source), this.wrappedBridgeHelperView, cloneData({}));
   }
 
   /**
