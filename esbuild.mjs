@@ -1,10 +1,10 @@
 import * as esbuild from "esbuild";
+import copyStaticFiles from "esbuild-copy-static-files";
 
 // Our background script and UI page can be modules.
 await esbuild.build({
   entryPoints: {
-    bridge: './src/index-bridge.js',
-
+    background: './src/index-background.js',
     simple: './src/index-simple.js',
   },
   format: "esm",
@@ -35,4 +35,10 @@ await esbuild.build({
   banner: {
     js: "// THIS IS A GENERATED FILE, DO NOT EDIT DIRECTLY",
   },
+  plugins: [
+    copyStaticFiles({
+      src: "./static",
+      dest: "./build",
+    })
+  ]
 });

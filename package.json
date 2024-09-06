@@ -7,16 +7,17 @@
   "author": "",
   "license": "",
   "devDependencies": {
-    "esbuild": "^0.23.0"
+    "esbuild": "^0.23.0",
+    "esbuild-copy-static-files": "^0.1.0"
   },
   "dependencies": {
-    "@iarna/toml": "^2.2.5",
+    "iarna-toml-esm": "^3.0.5",
     "binary-search-bounds": "^2.0.5",
-    "cors": "^2.8.5",
-    "vis-data": "^7.1.2",
-    "vis-timeline": "^7.4.6"
+    "vis-data": "^7.1.9",
+    "vis-timeline": "^7.7.3"
   },
   "scripts": {
-    "build": "node esbuild.mjs"
+    "build": "node esbuild.mjs",
+    "webext-build": "web-ext build --source-dir=build"
   }
 }

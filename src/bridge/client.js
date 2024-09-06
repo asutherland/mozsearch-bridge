@@ -1,46 +1,28 @@
 /**
  * For code that wants to talk to a pernosco endpoint.
- *
- * The lazy API here is:
- * - The first request attempts to connect to the most recent pernosco session
- *   if not already connected to one.
- *   - In the future there would be an API to enumerate the known/live sessions
- *     so a combo-box can be used or whatever.
- * - Requests resolve when the entirety of the data is received.
- * - Nothing tracks focus right now.
- *
- * See `server.js` for docs on the rendezvous.
  **/
 
-import { generateId } from './idgen.js'
-import { BroadcastChannelMessageHandler } from './msg_handler.js';
+import { RuntimeConnectIssuingHandler } from './msg_handler.js';
 
-export class BridgeClient extends BroadcastChannelMessageHandler {
+export class BridgeClient extends RuntimeConnectIssuingHandler {
   constructor({ onStatusReport }) {
-    super('client');
+    // This is fairly hacky, but to start, we just tunnel the session id through
+    // the hash, but we probably should be trying to use a tab weakmap or
+    // equivalent.  That would help with the reloads.
+    super('client', document.location.hash.slice(1));
+    document.location.hash = "";
 
     this.statusReport = null;
 
-    this.lookForServers();
-
     this.onStatusReport = onStatusReport;
-  }
-
-  lookForServers() {
-    this.broadcastMessage('rollcall', {});
   }
 
   setFocus(focus) {
     this.sendMessage('focus', { focus });
   }
 
-  onMsg_helloThisIsServer(statusReport, _replyFunc, rawMsg) {
-    // Automatically just use whatever pernosco session we most recently heard
-    // from.
-    this.setTargetBridgeId(rawMsg.senderBridgeId);
-    console.log('Messages now target', rawMsg.senderBridgeId);
-
-    this.onMsg_statusReport(statusReport);
+  onMsg_helloThisIsServer(statusReport) {
+    this.onMsg_statusReport(statusReport.status);
   }
 
   onMsg_statusReport(statusReport) {

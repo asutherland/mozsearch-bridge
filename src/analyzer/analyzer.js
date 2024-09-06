@@ -1,4 +1,4 @@
-import parse from '@iarna/toml/parse-string';
+import { parse } from 'iarna-toml-esm';
 import bounds from 'binary-search-bounds';
 
 import { grokPML, grokPMLRows } from '../pmlgrok/grokker.js';

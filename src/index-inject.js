@@ -1,15 +1,117 @@
 /**
- * This is the bit of JS that gets injected via a bookmarklet and creates an
- * iframe communication bridge.  The iframe is currently just a way to bounce
- * messages across to a BroadcastChannel in the iframe's origin.
- */
+ * This is the content script that is loaded into a pernosco tab when requested
+ * via the action button.
+ **/
 
 import { BridgeServer } from './bridge/server.js';
 
-// XXX figure out our port from scraping our bookmarklet script tag.
-const PORT = 3333;
-const ORIGIN = `http://localhost:${PORT}`
+function cloneData(obj) {
+  return cloneInto(obj, window);
+}
 
+/**
+ * Given an active object that has internal state that does not need to be
+ * exposed into the content global, create bound copies of all its methods and
+ * put them on an otherwise data-free object that can be exposed into content
+ * via cloneInto.
+ *
+ * [nsIXPCComponents_Utils::exportFunction](https://searchfox.org/mozilla-central/rev/15287e6509be6a590be319cdc5ca377bfda6ea27/js/xpconnect/idl/xpccomponents.idl#525-543)
+ * is the foundational primitive that we have, with `cloneInto` optionally
+ * providing a way to effectively apply it to all the functions on an object.
+ * As explained in the documentation above, exportFunction loses the `this` so
+ * for that to do something useful we do need to bind our functions first.  Data
+ * passing into our function is structured cloned, so rich object references
+ * will not do anything useful.
+ *
+ * The specific exposures for the sandbox come from
+ * https://searchfox.org/mozilla-central/rev/f09e3f9603a08b5b51bf504846091579bc2ff531/js/xpconnect/src/Sandbox.cpp#1413-1417
+ *
+ * The big question is whether we should ever really be doing this.  The
+ * original approach was just to use a bookmarklet to insert some code that
+ * would run entirely in the pernos.co origin, with postMessage effectively just
+ * being bridged through use of an iframe.  The structured serialization
+ * boundaries in that case are already aligned with postMessage; it just has to
+ * happen twice (once crossing into the iframe, once over the BroadcastChannel).
+ * That approach had to be abandoned because although bookmarklets themselves
+ * violate CSP while they are running, they are not allowed to bestow
+ * CSP-violating powers on script tags they create.  But WebExtensions can,
+ * although not without some complexity and potentially placing the privileged
+ * webext code at the risk of a confused deputy attack since it can't easily
+ * distinguisn from its own code running in the site global versus the site
+ * code (or random third-party code).
+ *
+ * So we could just reinstate the iframe idiom; but for now we're trying this
+ * approach because it feels like slightly less of a complexity nightmare if it
+ * works.
+ */
+function wrapActiveInto(obj) {
+  console.log("!! wrapping obj", obj);
+  const preWrap = {};
+  // Walk the prototype chain to expose things on the prototype chain too.
+  // Because the "this" semantics in general don't work because we have to bind
+  // every method, there's no opportunity for computing each prototype once.
+  for (let curObj = obj; curObj !== Object.prototype; curObj = Object.getPrototypeOf(curObj)) {
+    for (const key of Object.getOwnPropertyNames(curObj)) {
+      const val = curObj[key];
+      if (typeof(val) === "function") {
+        preWrap[key] = (...args) => { obj[key](...args) };
+        //preWrap[key] = val.bind(obj);
+        console.log("  - wrapping key", key);
+      } else {
+        console.log("  ~ not wrapping", typeof(val), key);
+      }
+    }
+  }
+
+  return cloneInto(preWrap, window, { cloneFunctions: true });
+}
+function wrapActiveIntoFancier(obj) {
+  console.log("!! wrapping obj", obj);
+  //const wrapped = new window.Object();
+  const wrapped = createObjectIn(window);
+  // Walk the prototype chain to expose things on the prototype chain too.
+  // Because the "this" semantics in general don't work because we have to bind
+  // every method, there's no opportunity for computing each prototype once.
+  for (let curObj = obj; curObj !== Object.prototype; curObj = Object.getPrototypeOf(curObj)) {
+    for (const key of Object.getOwnPropertyNames(curObj)) {
+      const val = curObj[key];
+      if (typeof(val) === "function") {
+        const wrappedFunc = exportFunction((...args) =>  obj[key](...args), wrapped);
+        window.wrappedJSObject.Object.defineProperty(wrapped, key, { value: wrappedFunc, enumerable: true });
+        // Note that we bind to the obj, not the curObj.
+        //wrapped[key] = val.bind(obj);
+        console.log("  - wrapping key", key);
+      } else {
+        console.log("  ~ not wrapping", typeof(val), key);
+      }
+    }
+  }
+
+  return wrapped;
+}
+function wrapActiveIntoOld(obj) {
+  console.log("!! wrapping obj", obj);
+  const wrapped = new window.Object(); //createObjectIn(window.wrappedJSObject);
+  // Walk the prototype chain to expose things on the prototype chain too.
+  // Because the "this" semantics in general don't work because we have to bind
+  // every method, there's no opportunity for computing each prototype once.
+  for (let curObj = obj; curObj !== Object.prototype; curObj = Object.getPrototypeOf(curObj)) {
+    for (const key of Object.getOwnPropertyNames(curObj)) {
+      const val = curObj[key];
+      if (typeof(val) === "function") {
+        const wrappedFunc = exportFunction((...args) => { obj[key](...args) }, wrapped.wrappedJSObject);
+        window.Object.defineProperty(wrapped.wrappedJSObject, key, { get: exportFunction(() => wrappedFunc, wrapped), enumerable: true  });
+        // Note that we bind to the obj, not the curObj.
+        //wrapped[key] = val.bind(obj);
+        console.log("  - wrapping key", key);
+      } else {
+        console.log("  ~ not wrapping", typeof(val), key);
+      }
+    }
+  }
+
+  return wrapped.wrappedJSObject;
+}
 
 /**
  * Build an "executions of" query centered around the UI's current position in
@@ -17,7 +119,7 @@ const ORIGIN = `http://localhost:${PORT}`
  * before and after the current position.
  */
 function buildRangeQuery(mixArgs, limit=50) {
-  const queryFocus = Object.assign({}, window.client.focus);
+  const queryFocus = Object.assign({}, this.pclient.focus);
   const focusMoment = queryFocus.moment;
   return [
     Object.assign({
@@ -56,7 +158,7 @@ function buildRangeQuery(mixArgs, limit=50) {
  * trace.
  */
 function buildSimpleQuery(mixArgs) {
-  const queryFocus = Object.assign({}, window.client.focus);
+  const queryFocus = Object.assign({}, this.pclient.focus);
   return Object.assign({
     focus: queryFocus,
   }, mixArgs);
@@ -121,7 +223,9 @@ class BridgeHelperView {
     this.pclient = pclient;
     this.bridge = bridge;
 
-    this._register();
+    // XXX thwe're now making the caller register the view because of the need
+    // to pass a wrapped reference
+    //this._register();
   }
 
   _register() {
@@ -130,7 +234,9 @@ class BridgeHelperView {
     // There's a removeView but it assumes layout is involved.
     //this.pclient.views.delete(oldView);
     // But this currently doesn't involve layout.
-    this.pclient.addView(this);
+
+    // XXX caller registers us
+    //this.pclient.addView(this);
   }
 
   /**
@@ -228,19 +334,19 @@ class BridgeHelperView {
   }
 }
 
-class POCServer extends BridgeServer {
+class ContentScriptServer extends BridgeServer {
   constructor(iframe) {
     super({
       roleType: 'server',
-      win: window,
-      iframe,
-      pclient: window.client,
+      // We need to use `wrappedJSObject` to disclaim the xray wrapper.
+      pclient: window.wrappedJSObject.client,
     });
 
-    this.bridgeHelperView = new BridgeHelperView({
+    this.wrappedBridgeHelperView = wrapActiveInto(new BridgeHelperView({
       pclient: this.pclient,
       bridge: this,
-    });
+    }));
+    this.pclient.addView(this.wrappedBridgeHelperView);
   }
 
   generateStatusReportPayload(options) {
@@ -269,14 +375,14 @@ class POCServer extends BridgeServer {
    * `Client.lastAnnotation`.
    */
   sendStatusReport(options) {
-    this.broadcastMessage('statusReport', this.generateStatusReportPayload(options));
+    this.sendMessage('statusReport', this.generateStatusReportPayload(options));
   }
 
   onMsg_focus({ focus, source }) {
     console.log('Setting focus to', focus);
-    this.pclient.willSetFocus(this.bridgeHelperView);
+    this.pclient.willSetFocus(this.wrappedBridgeHelperView);
     // TODO: Allow propagating the annotation.
-    this.pclient.setFocus(focus, source, this.bridgeHelperView, {});
+    this.pclient.setFocus(focus, source, this.wrappedBridgeHelperView, {});
   }
 
   /**
@@ -295,7 +401,7 @@ class POCServer extends BridgeServer {
   }
 
   async onMsg_simpleQuery({ name, mixArgs }, reply) {
-    console.log('poc: processing simple query for', name);
+    console.log('processing simple query for', name);
     let queryId;
     try {
       const req = buildSimpleQuery(mixArgs);
@@ -313,15 +419,15 @@ class POCServer extends BridgeServer {
   }
 
   async onMsg_rangeQuery({ name, limit, mixArgs }, reply) {
-    console.log('poc: processing range query', name, mixArgs);
+    console.log('processing range query', name, mixArgs);
     let beforeQueryId, afterQueryId;
     try {
       const [beforeReq, afterReq] = buildRangeQuery(mixArgs, limit || 50);
       const beforeHandler = new BatchHandler();
-      beforeQueryId = this._openQuery(name, beforeReq, beforeHandler);
+      beforeQueryId = this._openQuery(name, cloneData(beforeReq), wrapActiveInto(beforeHandler));
 
       const afterHandler = new BatchHandler();
-      afterQueryId = this._openQuery(name, afterReq, afterHandler);
+      afterQueryId = this._openQuery(name, cloneData(afterReq), wrapActiveInto(afterHandler));
 
       const beforeResults = await beforeHandler.promise;
       beforeQueryId = null;
@@ -348,18 +454,8 @@ class POCServer extends BridgeServer {
   }
 }
 
-
-// Sorta idempotently create the iframe.
-let bridgeFrame = document.getElementById('pt-poc-bridge-frame');
-if (!bridgeFrame) {
-  bridgeFrame = document.createElement('iframe');
-  bridgeFrame.setAttribute('id', 'pt-poc-bridge-frame');
-  bridgeFrame.setAttribute('style', 'display: none;');
-  bridgeFrame.setAttribute('src', `${ORIGIN}/bridge.html`);
-  document.body.appendChild(bridgeFrame);
-} else {
-  bridgeFrame.bridge.cleanup();
-  window.removeEventListener('message', bridgeFrame.msgHandler);
+try {
+  globalThis.server = new ContentScriptServer();
+} catch (ex) {
+  console.error(ex);
 }
-
-bridgeFrame.bridge = new POCServer(bridgeFrame);

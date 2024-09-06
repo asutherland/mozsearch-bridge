@@ -14,6 +14,7 @@ let gMoment;
 let gNextReqId = 1;
 let client = new BridgeClient({
   onStatusReport(statusReport) {
+    console.log("Got status report:", statusReport);
     const statusElem = document.getElementById('status-content');
     statusElem.innerHTML = "";
     //statusElem.appendChild(prettifyData(statusReport));

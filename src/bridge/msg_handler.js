@@ -1,38 +1,32 @@
-import { generateId } from './idgen.js'
-
-const BROADCAST_CHANNEL_NAME = 'poc-bridge';
-
 /**
- * Common message-related logic for the BroadcastChannel faking of a more
- * MessageChannel style idiom.
+ * Simplified typed message support with async waiting for replies.  Assumes
+ * use of the webext [runtime.Port](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/runtime/Port)
+ * API where content script pages cannot directly communicate but instead must
+ * route all messages through the background page/script where the background
+ * script is responsible for establishing any pairwise connections.
+ *
+ * This started out assuming BroadcastChannel and then was simplified,
+ * justifying any and all weirdness.
  */
 export class MessageHandler {
+  #nextId;
+  #awaitingReplyPromises;
+  #awaitingPortQueue;
+
   constructor(roleType) {
-    this.bridgeId = generateId(roleType);
+    this.roleType = roleType;
+    this.#nextId = 1;
+    this.#awaitingReplyPromises = new Map();
+    this.#awaitingPortQueue = [];
 
-    this._awaitingReplyPromises = new Map();
-
-    this.targetBridgeId = null;
-    this.targetQueue = [];
+    this.port = null;
   }
 
-  broadcastMessage(type, payload) {
-    const msgId = generateId('msg', this.bridgeId);
+  setPort(port) {
+    this.port = port;
 
-    this._postMessage({
-      type,
-      msgId,
-      senderBridgeId: this.bridgeId,
-      targetBridgeId: 'broadcast',
-      payload
-    });
-  }
-
-  setTargetBridgeId(targetBridgeId) {
-    this.targetBridgeId = targetBridgeId;
-
-    let queue = this.targetQueue;
-    this.targetQueue = null;
+    let queue = this.#awaitingPortQueue;
+    this.#awaitingPortQueue = null;
 
     // queue may be null if this is not the first server we've heard of.  If
     // we were fancier, we might listen for a server to say it's going away
@@ -49,24 +43,23 @@ export class MessageHandler {
   }
 
   sendMessage(type, payload) {
-    if (!this.targetBridgeId) {
-      this.targetQueue.push({ type, payload, replyId: null });
+    if (!this.port) {
+      console.log("queueing sendMessage", type, payload);
+      this.#awaitingPortQueue.push({ type, payload, replyId: null });
       return;
     }
 
-    const msgId = generateId('msg', this.bridgeId);
+    const msgId = `msg${this.#nextId++}`;
 
     this._postMessage({
       type,
       msgId,
-      senderBridgeId: this.bridgeId,
-      targetBridgeId: this.targetBridgeId,
       payload
     });
   }
 
   sendMessageAwaitingReply(type, payload) {
-    const replyId = generateId('reply', this.bridgeId);
+    const replyId = `reply${this.#nextId++}`;
 
     let resolve, reject;
     let promise = new Promise((_resolve, _reject) => {
@@ -74,7 +67,7 @@ export class MessageHandler {
       reject = _reject;
     });
 
-    this._awaitingReplyPromises.set(replyId, { resolve, reject });
+    this.#awaitingReplyPromises.set(replyId, { resolve, reject });
 
     this._sendMessageAwaitingReply(type, payload, replyId);
 
@@ -82,33 +75,31 @@ export class MessageHandler {
   }
 
   _sendMessageAwaitingReply(type, payload, replyId) {
-    if (!this.targetBridgeId) {
-      this.targetQueue.push({ type, payload, replyId });
+    if (!this.port) {
+      this.#awaitingPortQueue.push({ type, payload, replyId });
       return;
     }
 
-    const msgId = generateId('msg', this.bridgeId);
+    const msgId = `msg${this.#nextId++}`;
 
     this._postMessage({
       type,
-      senderBridgeId: this.bridgeId,
-      targetBridgeId: this.targetBridgeId,
       msgId,
       replyId,
       payload
     });
   }
 
-  _onMessage(evt) {
-    const msg = evt.data;
+  _onMessage(msg) {
+    console.log("received message", msg);
 
-    if (msg.type === 'reply') {
-      if (!this._awaitingReplyPromises.has(msg.msgId)) {
+    if (msg?.type === 'reply') {
+      if (!this.#awaitingReplyPromises.has(msg.msgId)) {
         return;
       }
-      const { resolve } = this._awaitingReplyPromises.get(msg.msgId);
+      const { resolve } = this.#awaitingReplyPromises.get(msg.msgId);
       resolve(msg.payload);
-      this._awaitingReplyPromises.delete(msg.msgId);
+      this.#awaitingReplyPromises.delete(msg.msgId);
       return;
     }
 
@@ -120,8 +111,6 @@ export class MessageHandler {
       replyFunc = (payload) => {
         this._postMessage({
           type: 'reply',
-          targetBridgeId: msg.senderBridgeId,
-          senderBridgeId: this.bridgeId,
           msgId: replyId,
           payload,
         });
@@ -149,114 +138,50 @@ export class MessageHandler {
 }
 
 /**
- * MessageHandler that directly uses BroadcastChannel for comms.
+ * MessageHandler that waits for a connection.
  */
-export class BroadcastChannelMessageHandler extends MessageHandler {
+export class RuntimeConnectListeningHandler extends MessageHandler {
   constructor(roleType) {
     super(roleType);
 
-    this.bc = new BroadcastChannel(BROADCAST_CHANNEL_NAME);
-    this.bc.onmessage = this._onMessage.bind(this);
+    browser.runtime.onConnect.addListener(this.#onConnect.bind(this))
+  }
+
+  #onConnect(port) {
+    console.log("Port connection received.");
+    this.setPort(port);
+    port.onMessage.addListener(this._onMessage.bind(this));
+
+    if ("onConnect" in this) {
+      this.onConnect();
+    }
   }
 
   _postMessage(msg) {
-    this.bc.postMessage(msg);
+    console.log("posting", msg);
+    this.port.postMessage(msg);
   }
 }
 
 /**
- * MessageHandler that relays to a BroadcastChannel indirectly via iframe.  The
- * presumed counterpart to this is the InsideIframeBroadcastChannelBridge.
+ * MessageHandler that initiates a connection to the background page.
  */
-export class OutsideIframeMessageHandler extends MessageHandler {
-  constructor({ roleType, win, iframe }) {
+export class RuntimeConnectIssuingHandler extends MessageHandler {
+  constructor(roleType, name) {
     super(roleType);
 
-    this.win = win;
-    this.iframe = iframe;
-    const url = new URL(iframe.src);
-    this.origin = url.origin;
+    console.log("Opening port with name:", name);
+    const port = browser.runtime.connect({ name });
+    this.setPort(port);
+    port.onMessage.addListener(this._onMessage.bind(this));
 
-    // we defer messages until the iframe is ready for us.
-    this.pendingQueue = [];
-
-    this._boundIframeLoaded = this._iframeLoaded.bind(this);
-    this.iframe.addEventListener('load', this._boundIframeLoaded);
-    console.log('oimh: waiting for load of', url, 'with origin', this.origin);
-
-    this._boundWindowMessage = this._onWindowMessage.bind(this);
-    this.win.addEventListener('message', this._boundWindowMessage);
-  }
-
-  _iframeLoaded() {
-    console.log('oimh: iframe loaded');
-    this.iframe.removeEventListener('load', this._boundIframeLoaded);
-
-    let queue = this.pendingQueue;
-    this.pendingQueue = null;
-
-    for (let msg of queue) {
-      this._postMessage(msg);
+    if ("onConnect" in this) {
+      this.onConnect();
     }
-  }
-
-  cleanup() {
-    this.win.removeEventListener('message', this._boundWindowMessage);
   }
 
   _postMessage(msg) {
-    if (this.pendingQueue) {
-      this.pendingQueue.push(msg);
-      return;
-    }
-
-    console.log('oimh: postMessage:', msg);
-    this.iframe.contentWindow.postMessage(msg, this.origin);
-  }
-
-  /**
-   * Process messages that come from our iframe bridge.  We need to filter out
-   * any other messsages pernosco might be receiving;
-   */
-  _onWindowMessage(evt) {
-    if (this.origin && evt.origin !== this.origin) {
-      return;
-    }
-    evt.stopPropagation();
-    evt.preventDefault();
-
-    console.log('oimh: receive:', evt.data);
-    this._onMessage(evt);
-  }
-}
-
-/**
- * Lives inside an iframe and relays messages received from outside the iframe
- * sent by OutsideIframeMessageHandler over BroadcastChannel.  This is not a
- * MessageHandler but a naive relay.
- *
- * Message flow is therefore:
- * - In from BroadcastChannel => out to parent window
- * - In from own window => out to BroadcastChannel
- */
-export class InsideIframeBroadcastChannelBridge {
-  constructor({ win }) {
-    this.win = win;
-    this.parentWin = win.parent;
-
-    this.win.addEventListener('message', this._onWindowMessage.bind(this));
-
-    this.bc = new BroadcastChannel(BROADCAST_CHANNEL_NAME);
-    this.bc.onmessage = this._onBCMessage.bind(this);
-  }
-
-  _onBCMessage(evt) {
-    // Our parent can only be the pernosco window we were created in, '*' is
-    // fine.
-    this.parentWin.postMessage(evt.data, '*');
-  }
-
-  _onWindowMessage(evt) {
-    this.bc.postMessage(evt.data);
+    console.log("posting", msg);
+    this.port.postMessage(msg);
   }
 }
