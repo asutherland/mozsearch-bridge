@@ -614,7 +614,7 @@ class Analyzer {
       }
     }
 
-    const print = printParts?.length ? printParts.join(', ') : undefined;
+    const print = printParts?.length ? printParts.join('; ') : undefined;
 
     if (!queryParams) {
       queryParams = {
@@ -1341,6 +1341,11 @@ class Analyzer {
         let contentPieces = [];
         if (exec.data?.capture) {
           for (const [name, item] of Object.entries(exec.data.capture)) {
+            // Skip undefined items.
+            if (!item) {
+              console.warn(`no data for capture "${name}" for symName "${symName}"`);
+              continue;
+            }
             const useName = (item.name === "???") ? name : item.name;
             if (item.value && item.value.data) {
               contentPieces.push(`${useName}: ${item.value.data}`);

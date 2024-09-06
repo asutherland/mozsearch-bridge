@@ -2,7 +2,7 @@
 
 [trace."mozilla::dom::ServiceWorkerUpdateJob::ComparisonResult"]
 [trace."mozilla::dom::ServiceWorkerUpdateJob::ComparisonResult".capture]
-status.eval = "Status"
+status.eval = "aStatus"
 inCache.eval = "aInCacheAndEqual"
 
 [trace."mozilla::dom::serviceWorkerScriptCache::PurgeCache"]

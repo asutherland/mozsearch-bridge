@@ -825,11 +825,11 @@ async function runAnalyzer() {
   eStatus.textContent = '';
 
   const analyzer = gAnalyzer = await loadAnalyzer([
-    //'toml-configs/sw-lifecycle.toml',
+    'toml-configs/sw-lifecycle.toml',
     //'toml-configs/document-channel.toml'
     //'toml-configs/browsing-context.toml',
     //'toml-configs/canonical-browsing-context.toml',
-    'toml-configs/global-window.toml',
+    //'toml-configs/global-window.toml',
   ]);
   // The results are currently just the aggregation of all the underlying
   // queries.
