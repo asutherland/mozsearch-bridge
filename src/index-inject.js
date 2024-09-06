@@ -45,7 +45,6 @@ function cloneData(obj) {
  * works.
  */
 function wrapActiveInto(obj) {
-  console.log("!! wrapping obj", obj);
   const preWrap = {};
   // Walk the prototype chain to expose things on the prototype chain too.
   // Because the "this" semantics in general don't work because we have to bind
@@ -54,63 +53,12 @@ function wrapActiveInto(obj) {
     for (const key of Object.getOwnPropertyNames(curObj)) {
       const val = curObj[key];
       if (typeof(val) === "function") {
-        preWrap[key] = (...args) => { obj[key](...args) };
-        //preWrap[key] = val.bind(obj);
-        console.log("  - wrapping key", key);
-      } else {
-        console.log("  ~ not wrapping", typeof(val), key);
+        preWrap[key] = val.bind(obj);
       }
     }
   }
 
   return cloneInto(preWrap, window, { cloneFunctions: true });
-}
-function wrapActiveIntoFancier(obj) {
-  console.log("!! wrapping obj", obj);
-  //const wrapped = new window.Object();
-  const wrapped = createObjectIn(window);
-  // Walk the prototype chain to expose things on the prototype chain too.
-  // Because the "this" semantics in general don't work because we have to bind
-  // every method, there's no opportunity for computing each prototype once.
-  for (let curObj = obj; curObj !== Object.prototype; curObj = Object.getPrototypeOf(curObj)) {
-    for (const key of Object.getOwnPropertyNames(curObj)) {
-      const val = curObj[key];
-      if (typeof(val) === "function") {
-        const wrappedFunc = exportFunction((...args) =>  obj[key](...args), wrapped);
-        window.wrappedJSObject.Object.defineProperty(wrapped, key, { value: wrappedFunc, enumerable: true });
-        // Note that we bind to the obj, not the curObj.
-        //wrapped[key] = val.bind(obj);
-        console.log("  - wrapping key", key);
-      } else {
-        console.log("  ~ not wrapping", typeof(val), key);
-      }
-    }
-  }
-
-  return wrapped;
-}
-function wrapActiveIntoOld(obj) {
-  console.log("!! wrapping obj", obj);
-  const wrapped = new window.Object(); //createObjectIn(window.wrappedJSObject);
-  // Walk the prototype chain to expose things on the prototype chain too.
-  // Because the "this" semantics in general don't work because we have to bind
-  // every method, there's no opportunity for computing each prototype once.
-  for (let curObj = obj; curObj !== Object.prototype; curObj = Object.getPrototypeOf(curObj)) {
-    for (const key of Object.getOwnPropertyNames(curObj)) {
-      const val = curObj[key];
-      if (typeof(val) === "function") {
-        const wrappedFunc = exportFunction((...args) => { obj[key](...args) }, wrapped.wrappedJSObject);
-        window.Object.defineProperty(wrapped.wrappedJSObject, key, { get: exportFunction(() => wrappedFunc, wrapped), enumerable: true  });
-        // Note that we bind to the obj, not the curObj.
-        //wrapped[key] = val.bind(obj);
-        console.log("  - wrapping key", key);
-      } else {
-        console.log("  ~ not wrapping", typeof(val), key);
-      }
-    }
-  }
-
-  return wrapped.wrappedJSObject;
 }
 
 /**
