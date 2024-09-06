@@ -382,6 +382,15 @@ class GrokContext {
             expectingHandlerDelim = false;
             continue;
           }
+
+          // There's also an ellipsis possibility if this is the last element.
+          // The container should probably have "collapsible" on it in this case
+          // although it's not clear there's a benefit to checking.
+          if (iNode === (children.length - 1) &&
+              node === `${handler.repeatDelim} …`) {
+            expectingHandlerDelim = false;
+            continue;
+          }
         }
 
         this.error(
