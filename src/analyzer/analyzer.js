@@ -295,6 +295,8 @@ class AnalyzerConfig {
           mode: rawInfo.identityMethodMode || 'last-line',
           classInfo,
           capture: null,
+          // The constructor-exit extra trace is not useful to display.
+          hideFromTimeline: rawInfo.identityMethod === 'constructor-exit',
         };
         classInfo.identitySamplingTraceDef = identityTraceDef;
         this.traceMethods.push(identityTraceDef);
@@ -1349,6 +1351,13 @@ class Analyzer {
     const methodTrackMap = new Map();
 
     for (const { symName, traceDef, execs } of this.traceResultsMap.values()) {
+      // Some traces like the identityMethod of 'constructor-exit' trace exist
+      // for their extracted data but do not want to be naively shown on the
+      // timeline.  (The object lifetime already covers that.)
+      if (traceDef.hideFromTimeline) {
+        continue;
+      }
+
       let methodName = shortSymbolName(symName);
       for (const exec of execs) {
         const startSeqId = momentToSeqId.get(exec.call.meta.entryMoment);
