@@ -1,0 +1,32 @@
+namespace.prefix = "mozilla::dom::"
+
+[class."ServiceWorkerInfo"]
+semType = "SWInfo"
+lifecycle = true
+identityMethod = "constructor-exit"
+[class."ServiceWorkerInfo".identity]
+scope.eval = "mDescriptor.mData->scope_.mData"
+[class."ServiceWorkerInfo".state]
+state.eval = "mDescriptor.mData->state_.mVal"
+
+[trace."ServiceWorkerInfo::UpdateState"]
+
+[class."ServiceWorkerPrivate"]
+semType = "SWPrivate"
+lifecycle = true
+identityMethod = "constructor"
+[class."ServiceWorkerPrivate".identity]
+SWInfo.arg = "aInfo"
+
+[trace."ServiceWorkerPrivate::SpawnWorkerIfNeeded".capture]
+# The type is a Variant and the tag is which class it is.
+ext.eval = "aLifetimeExtension.tag"
+ext.map = ["none", "propagated", "full"]
+[trace."ServiceWorkerPrivate::TerminateWorker"]
+
+[class."RemoteWorkerControllerChild"]
+semType = "RWController"
+lifecycle = true
+identityMethod = "constructor"
+[class."RemoteWorkerControllerChild".identity]
+SWPrivate.arg = "aObserver"

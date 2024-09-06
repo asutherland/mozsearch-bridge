@@ -523,7 +523,12 @@ function renderTimeline(container, doStack=true, groupOrder) {
       if (info.what === "background" && info.group) {
         const group = gTimelineGroups.get(info.group);
         console.log('BACKGROUND GROUP', group);
-        client.setFocus(group.extra.inst.constructorExec.call.meta.focusInfo);
+        const focusInfo = group?.extra?.inst?.constructorExec?.call?.meta?.focusInfo;
+        if (focusInfo) {
+          client.setFocus(focusInfo);
+        } else {
+          console.log('No focus info; not trying to focus.');
+        }
       }
     });
     gTimeline.on('select', ({items, event}) => {
@@ -825,7 +830,8 @@ async function runAnalyzer() {
   eStatus.textContent = '';
 
   const analyzer = gAnalyzer = await loadAnalyzer([
-    'toml-configs/sw-lifecycle.toml',
+    //'toml-configs/sw-lifecycle.toml',
+    'toml-configs/swp-lifecycle.toml',
     //'toml-configs/document-channel.toml'
     //'toml-configs/browsing-context.toml',
     //'toml-configs/canonical-browsing-context.toml',

@@ -270,7 +270,7 @@ class AnalyzerConfig {
           capture: null,
         };
 
-        if (rawInfo.identityMethod === "constructor") {
+        if (rawInfo.identityMethod === 'constructor') {
           classInfo.identitySamplingTraceDef = constructorTraceDef;
         } else {
           classInfo.identitySamplingTraceDef = destructorTraceDef;
@@ -278,14 +278,18 @@ class AnalyzerConfig {
         this.traceMethods.push(destructorTraceDef);
       }
 
-      if (rawInfo.identityMethod === "constructor") {
+      if (rawInfo.identityMethod === 'constructor') {
         // We actually handled this above in trackLifecycle.  We just want to
         // avoid the next case from handling this.  And the default is
         // destructor.
       }
       else if (rawInfo.identityMethod) {
-        classInfo.identityMethodSymName =
-          this.normalizeSymName(rawInfo.identityMethod);
+        if (rawInfo.identityMethod === 'constructor-exit') {
+          classInfo.identityMethodSymName = deriveClassConstructor(className);
+        } else {
+          classInfo.identityMethodSymName =
+            this.normalizeSymName(rawInfo.identityMethod);
+        }
         const identityTraceDef = {
           symName: classInfo.identityMethodSymName,
           mode: rawInfo.identityMethodMode || 'last-line',
@@ -387,6 +391,16 @@ class AnalyzerConfig {
         classInfo,
         captureDefs,
         stateDefs,
+        // Including the rawInfo right now so that we can introduce the "map"
+        // mechanism for results, allowing us to key based off of the name when
+        // we are iterating over the captured data, which does not currently
+        // perform a parallel traverse on the captureDefs, etc.
+        //
+        // It's likely worth revisiting this, although there's also no real
+        // need for us to normalize everything, and it seems fine to use the
+        // raw data for cases that don't need to be normalized.  (We normalize
+        // captures and states because we introduce some synthetic ones, etc.)
+        rawInfo,
       });
     }
   }
@@ -794,7 +808,8 @@ class Analyzer {
                       // expects the { l: [l, c] } pos to have been expanded to
                       // { lineNumber, column } as
                       // `textReferenceToOriginalTextPosition` does.
-                      points: [{ l: linePos.l[0], c: linePos.l[1], o: 0 }]
+                      points: [{ l: linePos.l[0], c: linePos.l[1], o: 0, o8: 0 }],
+                      frame: lineFocus.frame,
                     },
                   },
                 });
@@ -1346,15 +1361,24 @@ class Analyzer {
               console.warn(`no data for capture "${name}" for symName "${symName}"`);
               continue;
             }
-            const useName = (item.name === "???") ? name : item.name;
+            // XXX I'm not sure why I thought using the pernosco provided name
+            // would be better than the explicit name, just using explicit name.
+            const useName = name; // (item.name === "???") ? name : item.name;
             if (item.value && item.value.data) {
-              contentPieces.push(`${useName}: ${item.value.data}`);
+              const maybeMap = traceDef?.rawInfo?.capture?.[name]?.map;
+              if (maybeMap) {
+                contentPieces.push(`${useName}: ${maybeMap[item.value.data]}`);
+              } else {
+                contentPieces.push(`${useName}: ${item.value.data}`);
+              }
             }
           }
         }
         if (exec.data?.classState) {
           for (const [name, item] of Object.entries(exec.data.classState)) {
-            const useName = (item.name === "???") ? name : item.name;
+            // XXX I'm not sure why I thought using the pernosco provided name
+            // would be better than the explicit name, just using explicit name.
+            const useName = name; // (item.name === "???") ? name : item.name;
             if (item.value && item.value.data) {
               contentPieces.push(`${useName}: ${item.value.data}`);
             }
