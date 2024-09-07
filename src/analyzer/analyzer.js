@@ -799,19 +799,10 @@ class Analyzer {
                   mixArgs: {
                     params: {
                       url: useSourceUrl,
-                      // The o is an offset in the source file that SourceText
-                      // goes to a lot of work to figure out.
-                      //
-                      // For now we're just going to try to pass a 0 offset and
-                      // see if that works.  Otherwise, it likely makes sense
-                      // to create an async protocol to make SourceText do the
-                      // work for us via
-                      // `originalTextPositionToClientTextReference` which
-                      // expects the { l: [l, c] } pos to have been expanded to
-                      // { lineNumber, column } as
-                      // `textReferenceToOriginalTextPosition` does.
-                      points: [{ l: linePos.l[0], c: linePos.l[1], o: 0, o8: 0 }],
-                      frame: lineFocus.frame,
+                      // pernosco wants `o` and `o8` offset values; these get
+                      // fixed up on the other side automatically based on this
+                      // shape (params.url, params.points).
+                      points: [{ l: linePos.l[0], c: linePos.l[1] }],
                     },
                   },
                 });

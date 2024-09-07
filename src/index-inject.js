@@ -66,7 +66,19 @@ function wrapActiveInto(obj) {
  * the trace.  The query will be limited to `limit` results in events occurring
  * before and after the current position.
  */
-function buildRangeQuery(pclient, mixArgs, limit=50) {
+async function buildRangeQuery(pclient, mixArgs, limit=50) {
+  // If there are points included in the context of a URL, we need to update
+  // the points to have offsets.
+  if (mixArgs?.params?.url && mixArgs?.params?.points) {
+    // get the SourceText
+    const sourceText = await new window.Promise((resolve) => {
+      pclient.requestSource(mixArgs.params.url, true, exportFunction(resolve, window));
+    });
+    let transformed = mixArgs.params.points.map(({l, c}) =>
+      sourceText.wrappedJSObject.originalTextPositionToClientTextReference(cloneData({ lineNumber: l, column: c}))
+    );
+    mixArgs.params.points = transformed;
+  }
   const queryFocus = Object.assign({}, pclient.focus);
   const focusMoment = queryFocus.moment;
   return [
@@ -370,7 +382,8 @@ class ContentScriptServer extends BridgeServer {
     console.log('processing range query', name, mixArgs);
     let beforeQueryId, afterQueryId;
     try {
-      const [beforeReq, afterReq] = buildRangeQuery(this.pclient, mixArgs, limit || 50);
+      const [beforeReq, afterReq] = await buildRangeQuery(this.pclient, mixArgs, limit || 50);
+      console.log("query", name, beforeReq, afterReq);
       const beforeHandler = new BatchHandler();
       beforeQueryId = this._openQuery(name, cloneData(beforeReq), wrapActiveInto(beforeHandler));
 
