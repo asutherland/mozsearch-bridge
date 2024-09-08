@@ -1,0 +1,8 @@
+namespace.prefix = "mozilla::"
+
+[trace."AppShutdown::AdvanceShutdownPhase"]
+# This happens in every process, but we only want to show this context when we
+# are showing something happening in the process for other reasons.
+hideForInertProcesses = true
+[trace."AppShutdown::AdvanceShutdownPhase".capture]
+phase.eval = "aPhase"

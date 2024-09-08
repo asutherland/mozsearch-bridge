@@ -641,6 +641,25 @@ async function queryCurrentTasks() {
   }
 }
 
+async function queryTaskTree() {
+  const eOutput = document.getElementById('output-content');
+  // This is our brand for ensuring we still should be the one outputting there.
+  const reqId = eOutput.reqId = gNextReqId++;
+
+  const results = await client.sendMessageAwaitingReply(
+    'simpleQuery',
+    {
+      name: 'task-tree',
+      mixArgs: {
+        params: {}
+      },
+    });
+
+  if (eOutput.reqId === reqId) {
+    prettifyQueryResultsInto(results, eOutput, 'task-tree');
+  }
+}
+
 // XXX deref was for a time distinct from "evaluate", but this should now be
 // merged a little.
 async function queryDeref(focus, data, moment) {
@@ -830,6 +849,7 @@ async function runAnalyzer() {
   eStatus.textContent = '';
 
   const analyzer = gAnalyzer = await loadAnalyzer([
+    'toml-configs/shutdown-phases.toml',
     //'toml-configs/sw-lifecycle.toml',
     'toml-configs/swp-lifecycle.toml',
     //'toml-configs/document-channel.toml'
@@ -951,6 +971,10 @@ window.addEventListener('load', () => {
 
   document.getElementById('show-current-tasks').addEventListener('click', (evt) => {
     queryCurrentTasks();
+  });
+
+  document.getElementById('show-task-tree').addEventListener('click', (evt) => {
+    queryTaskTree();
   });
 
   document.getElementById('analyze-run').addEventListener('click', (evt) => {

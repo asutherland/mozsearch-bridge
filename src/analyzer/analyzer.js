@@ -1136,7 +1136,7 @@ class Analyzer {
    * make the global scale useful.)
    *
    * We are explicitly not attempting to establish a mapping consistent with the
-   * wall cock or with a global linearization over all instructions executed
+   * wall clock or with a global linearization over all instructions executed
    * (which would be the most realistic timeline), but if it turns out pernosco
    * provides a means of doing the latter, it would be useful to be able to
    * visualize time gaps and optionally project events onto their instruction
@@ -1231,10 +1231,6 @@ class Analyzer {
 
   /**
    * Populate VisJS group and item datasets.
-   *
-   * The current approach for grouping is:
-   * - Create a group for each traced method on a per-TID basis.  We do this
-   *   so that the group can hold the method label and we can
    */
   renderIntoVisJs(groups, items) {
     const momentToSeqId = this.momentToSeqId;

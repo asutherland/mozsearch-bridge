@@ -44,6 +44,7 @@ class GrokContext {
   constructor() {
     this.verbose = false;
     this.stack = [];
+    this.blackboard = {};
   }
 
   isIdent(pml) {
@@ -79,6 +80,18 @@ class GrokContext {
       return false;
     }
     return (pml.c.length === 1 && typeof(pml.c[0]) === childType);
+  }
+
+  pickFirstChildOfType(pml, childType) {
+    if (!pml || !pml.c) {
+      return null;
+    }
+    for (const child of pml.c) {
+      if (child?.t === childType) {
+        return child;
+      }
+    }
+    return null;
   }
 
   isArraySubscripting(pml) {
@@ -238,7 +251,6 @@ class GrokContext {
     return pml.c[0];
   }
 
-
   getFlattenedString(pml) {
     if (!pml || !pml.c) {
       return null;
@@ -254,6 +266,17 @@ class GrokContext {
       }
     });
     return parts.join('');
+  }
+
+  /**
+   * For cases like the process argument list where the actual data is t=str
+   * interleaved with t=inline whitespace, normalize into an array whose items
+   * are the (flattened) payloads of the t=str nodes, with the t=inline nodes
+   * ignored.  parsify is overkill for this, but if this seems too limited, you
+   * probably want parsify.
+   */
+  pickAndExtractStrings(pml) {
+    return pml.c.filter(x => x.t === "str").map(x => this.getFlattenedString(x));
   }
 
   /**
@@ -489,6 +512,13 @@ class GrokContext {
       return this.parsify(kid, allHandlers);
     }
   }
+}
+
+/**
+ * Normalize a tuid into a string so that we can use it for key purposes.
+ */
+function normTuid(tuid) {
+  return `${tuid.serial}-${tuid.tid}`;
 }
 
 /**
@@ -1026,6 +1056,145 @@ function grokBreakpointHit(pml, ctx) {
     return result;
 }
 
+/**
+ * treeItems have a structure where the first child is a t=inline that contains
+ * the contents of the item.  All subsequent children are tree children where:
+ * - t=block children are leaf nodes which should only have a single inline
+ *   child which is their content.
+ * - t=treeItem children will also have children.
+ *
+ * For "task-tree", we also observe:
+ * - Nodes will either be describing a "process" or a "thread", where each will
+ *   be preceded by a descriptive word.  For processes we can see "Vfork" and
+ *   "Fork".  For threads we see "Create".  Note that while "Create " is initial
+ *   caps, both "process" and "thread" are lowercase but visually modified
+ *   through the use of the `domClass="capitalize"` on the block/treeItem.
+ * - "process" nodes sometimes have a 2-layer structure.  The "root" node will
+ *   be a t=inline "Fork process N" where "Fork " is a raw string followed by a
+ *   t=task which then wraps t=process with child string "process NNNN".
+ *
+ *   The first real child may be t=treeItem (because it must have children of its
+ *   own to at least describe the thread) whose first t=inline child will be the
+ *   command-line.  Its children will then be a combination of "Create thread",
+ *   "Fork process", "Exit, status N", or "Exit, fatal signal SIGKILL".  The
+ *   exit string will just be an inline string, but will have an associated
+ *   focus attribute.
+ *
+ *   Note that in some cases the "Exit" nodes seem to be at the samee level as
+ *   the command line arguments.  This seems like it might be when a signal
+ *   kills the process rather than the process exiting cleanly?  Either way we
+ *   don't currently care about exiting.
+ * - "thread" nodes are "Create " followed by a t=task wrapping another t=task
+ *   with children: ["thread NNNNNN (", t=str "thread name", ")"].
+ * - The only reason that makes sense for the wrapping is that it lets the
+ *   t=process also be a t=task, but it's not clear the UI cares about this.
+ *   It seems possible that this the backend datamodel leaking through somewhat.
+ *
+ * Representationally, while the normalized tree is interesting, and in
+ * particular that it's ordered by creation, a major result here is that we also
+ * populate a "thread" lookup on the provided context.
+ *
+ * Implementation-wise, because the structure is constrained, we hand-roll this.
+ */
+function grokTreeItem(rootPml, ctx, mode) {
+  if (mode !== "task-tree") {
+    console.warn("don't know how to handle tree with mode", mode);
+    return undefined;
+  }
+
+  const threadMap = ctx.blackboard.threadMap = new Map();
+  const processes = ctx.blackboard.processes = [];
+
+  // Processes a node with the given process id as the containing process.
+  const chewItem = (pml, inProc) => {
+    if (!pml || typeof(pml) !== "object" || !pml.c) {
+      return;
+    }
+
+    if (pml.t !== "block" && pml.t !== "treeItem") {
+      return;
+    }
+
+    // The content node, this should be t=inline.
+    const infoKid = pml.c[0];
+    if (infoKid?.t !== "inline") {
+      return;
+    }
+
+    // This is where labeling text like "Create " exists; we skip it.
+    const taskNode = ctx.pickFirstChildOfType(infoKid, "task");
+    if (!taskNode) {
+      return;
+    }
+
+    const isProcess = taskNode.c[0].t === "process";
+    // If this is a process,
+    if (isProcess) {
+      const procNode = taskNode.c[0];
+      let containerNode, args, name;
+
+      if (pml.c[1]?.t === "treeItem") {
+        containerNode = pml.c[1];
+        args = ctx.pickAndExtractStrings(containerNode.c[0]);
+        name = args[0];
+        const idxLastSlash = name.lastIndexOf("/");
+        if (idxLastSlash > -1) {
+          name = name.substring(idxLastSlash + 1);
+        }
+      } else {
+        containerNode = pml;
+        args = null;
+        // let's assume a fork-server idiom and we can inherit our parent
+        // process name;
+        name = inProc.name;
+      }
+      const tuid = procNode.a.tuid; // same info also on the taskNode.
+
+      const threads = [];
+      const thisProc = {
+        kind: "process",
+        puid: tuid,
+        tuid,
+        name,
+        args,
+        threads,
+      };
+      processes.push(thisProc);
+      threadMap.set(normTuid(tuid), thisProc);
+
+      for (let iNode = 1; iNode < containerNode.c.length; iNode++) {
+        const node = containerNode.c[iNode];
+        // It's possible is something like an "Exit..." line we want to skip.
+        if (ctx.isSoleString(node)) {
+          continue;
+        }
+
+        chewItem(node, thisProc);
+      }
+      // note that pml.c[2] onwards may exist, but we currently believe that to
+      // be a special-case "Exit"
+    } else { // it's a thread
+      const threadNode = taskNode.c[0];
+      const tuid = threadNode.a.tuid;
+      const name = ctx.pickFirstChildOfType(threadNode, "str");
+      const thread = {
+        kind: "thread",
+        puid: inProc.puid,
+        tuid,
+        name,
+      };
+
+      inProc.threads.push(thread);
+      threadMap.set(normTuid(tuid), thread);
+    }
+  };
+
+  console.log("Chewing root", rootPml);
+
+  chewItem(rootPml, 0);
+  return { processes };
+}
+
 const PRINT_DELIM_ARROW = "→";
 
 /**
@@ -1075,7 +1244,16 @@ function grokRootPML(pml, mode, results, focus) {
     let result;
     result = ctx.runGrokkerOnNode(grokFunctionArg, pml, "root-evaluate");
     results.push(result);
-    return
+    return;
+  }
+
+  // "task-tree" has a singular root treeItem, but "current-tasks" has a list of
+  // treeItems, one per current process, so this only works for "task-tree"
+  // right now.  (Although grokPMLRows should work for that...)
+  if (pml.t === "treeItem") {
+    let result = grokTreeItem(pml, ctx, mode);
+    results.push(result);
+    return;
   }
 
   if (pml.t !== "block") {
