@@ -1015,8 +1015,8 @@ function grokItemTypeFunction(pml, ctx) {
 
   const focusInfo = pml.a.focus;
   result.meta = {
-    pid: focusInfo.frame.addressSpaceUid.task.tid,
-    tid: focusInfo.tuid.tid,
+    puid: focusInfo.frame.addressSpaceUid.task,
+    tuid: focusInfo.tuid,
     entryMoment: focusInfo.frame.entryMoment,
     returnMoment: focusInfo.frame.returnMoment,
     focusInfo,
@@ -1291,8 +1291,8 @@ function grokRootPML(pml, mode, results, focus) {
     canonGrokker = (subPml, subCtx) => {
       const result = grokBreakpointHit(subPml, subCtx);
       result.meta = {
-        pid: focus.frame.addressSpaceUid.task.tid,
-        tid: focus.tuid.tid,
+        puid: focus.frame.addressSpaceUid.task,
+        tuid: focus.tuid,
         entryMoment: focus.frame.entryMoment,
         returnMoment: focus.frame.returnMoment,
         focusInfo: focus,
@@ -1396,5 +1396,62 @@ export function grokPMLRows(rows, mode) {
   return results;
 }
 
-export function renderGrokkedInto(grokked, elem) {
+export function grokStructured(rows, mode) {
+  const ctx = new GrokContext();
+  const results = [];
+
+  /**
+   * Helper to verify that the rows contains a single row that has an "items"
+   * property and that it has a single item whose pml type is `rootType`.  This
+   * explicitly is fine with rows that just have a `{ name: string }` payload.
+   *
+   * Result object contains:
+   * - "results": The list of results like `grokPMLRows` would provide.
+   * - "blackboard": The structured data built as a side-effect of the grokking
+   *   process that may provide multiple perspectives on the underlying data.
+   *   For example, the "task-tree" "results" are a sequenced hierarchy that
+   *   tells the history of how all processes came into existence, but will
+   *   create blackboard entries that map normalized tuid's to thread info as
+   *   well as a flattened list of all known processes.
+   */
+  const assertTreeShape = (checkRows, { rootType }) => {
+    let itemRows = 0;
+    let result = undefined;
+    for (const row of checkRows) {
+      if (row.items) {
+        if (itemRows++) {
+          throw new Error("Too many items rows!");
+        }
+        if (row.items.length > 1) {
+          throw new Error("Too many items!");
+        }
+        if (row.items[0].t !== rootType) {
+          throw new Error(`Root item has type ${checkRows.items[0].t} but should have ${rootType}`);
+        }
+        result = row.items[0];
+      }
+    }
+
+    if (!itemsRows || !result) {
+      throw new Error("No items rows!");
+    }
+    return result;
+  };
+
+  switch (mode) {
+    case "task-tree": {
+      const pml = assertTreeShape(rows, { rootType: "treeItem" });
+      let result = grokTreeItem(pml, ctx, mode);
+      results.push(result);
+      break;
+    }
+    default: {
+      throw new Error(`Unknown mode: ${mode}`);
+    }
+  }
+
+  return {
+    results,
+    blackboard: ctx.blackboard
+  };
 }

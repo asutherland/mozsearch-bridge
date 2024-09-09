@@ -1,7 +1,7 @@
 import { parse } from 'iarna-toml-esm';
 import bounds from 'binary-search-bounds';
 
-import { grokPML, grokPMLRows } from '../pmlgrok/grokker.js';
+import { grokPML, grokPMLRows, grokStructured } from '../pmlgrok/grokker.js';
 
 import { HierNode, HierBuilder } from './diagramming/core_diagram.js';
 
@@ -23,15 +23,22 @@ function deriveClassDestructor(name) {
   return parts.join('::');
 }
 
-// Assemble a PidPtr from a pid (process id) and pointer (hex string of a
-// pointer).
-function makePidPtr(pid, ptr) {
-  return `${pid}:${ptr}`;
+/**
+ * Normalize a tuid into a string so that we can use it for key purposes.
+ */
+function normTuid(tuid) {
+  return `${tuid.serial}-${tuid.tid}`;
 }
 
-function makePidPtrUsingFocusInfo(focusInfo, ptr) {
-  const pid = focusInfo.frame.addressSpaceUid.task.tid;
-  return makePidPtr(pid, ptr);
+// Assemble a PuidPtr from a puid (process id paired with a serial which handles
+// pid reuse) and pointer (hex string of a pointer).
+function makePuidPtr(puid, ptr) {
+  return `${puid.serial}-${puid.tid}:${ptr}`;
+}
+
+function makePuidPtrUsingFocusInfo(focusInfo, ptr) {
+  const puid = focusInfo.frame.addressSpaceUid.task;
+  return makePuidPtr(puid, ptr);
 }
 
 function cmpMoment(a, b) {
@@ -433,7 +440,7 @@ class Analyzer {
     // destructorTraceResults } and which may be expanded in the future.
     this.classResultsMap = new Map();
 
-    // Key is a `semType`, value is a Map whose keys are PidPtr strings (that
+    // Key is a `semType`, value is a Map whose keys are PuidPtr strings (that
     // combine a process id and hex string value for memory space uniqueness)
     // and values are arrays of instances with start/end values.
     this.semTypeToInstanceMap = new Map();
@@ -483,19 +490,19 @@ class Analyzer {
     return conceptInst;
   }
 
-  // Get the instance characterized by the given pidPtr at the provided moment.
+  // Get the instance characterized by the given puidPtr at the provided moment.
   // Our approach here is intentionally a little fuzzy since we current expect
   // to be performing lifecycle analyses at object destruction time and it's
   // conceivable for the destructions to have stale-ish pointers.  So we're
   // really asking what was the most recent instance for this address at the
   // given moment, even if it theoretically is already destroyed.
-  _getSemTypeInstance(semType, pidPtr, moment) {
+  _getSemTypeInstance(semType, puidPtr, moment) {
     const instanceMap = this.semTypeToInstanceMap.get(semType);
     if (!instanceMap) {
       return null;
     }
 
-    const instList = instanceMap.get(pidPtr);
+    const instList = instanceMap.get(puidPtr);
     if (!instList) {
       return null;
     }
@@ -514,6 +521,9 @@ class Analyzer {
 
     this.client = client;
     const allQueryResults = this.allQueryResults = [];
+
+    // ## Phase 0: Get global context info
+    await this._getTaskTree();
 
     // ## Phase 1: Trace methods of interest, noting interesting instances
     for (const config of this.configs) {
@@ -538,6 +548,25 @@ class Analyzer {
 
     console.log('Results', allQueryResults);
     return [];
+  }
+
+  async _sendAndGrokSimpleQuery(name) {
+    const rows = await client.sendMessageAwaitingReply(
+      'simpleQuery',
+      {
+        name,
+        mixArgs: {
+          params: {}
+        },
+      });
+
+    return grokStructured(rows, name);
+  }
+
+  async _getTaskTree() {
+    const { blackboard } = await this._sendAndGrokSimpleQuery('task-tree');
+
+    this.threadMap = blackboard.threadMap;
   }
 
   async _doTrace(traceDef, pass = 'initial', queryParams) {
@@ -847,11 +876,11 @@ class Analyzer {
 
       // NB: There may be a fundamental flaw related to class slicing that we
       // will need to address.  (Or maybe pernosco does magic for us already?)
-      const getInstanceListForPtr = (pidPtr) => {
-        let list = instanceMap.get(pidPtr);
+      const getInstanceListForPtr = (puidPtr) => {
+        let list = instanceMap.get(puidPtr);
         if (!list) {
           list = [];
-          instanceMap.set(pidPtr, list);
+          instanceMap.set(puidPtr, list);
         }
         return list;
       }
@@ -871,8 +900,8 @@ class Analyzer {
         const { symName, traceDef, execs } = constructorTraceResults;
         for (const exec of execs) {
           const thisPtr = extractThisPtr(exec.call);
-          const thisPidPtr = makePidPtr(exec.call.meta.pid, thisPtr);
-          const instList = getInstanceListForPtr(thisPidPtr);
+          const thisPuidPtr = makePuidPtr(exec.call.meta.puid, thisPtr);
+          const instList = getInstanceListForPtr(thisPuidPtr);
 
           // This is inherently the right sequential ordering MODULO the fact
           // that we use limits in our query request;s so we could be only
@@ -882,7 +911,7 @@ class Analyzer {
             // this identifier is only unique for a given semType; the
             // underlying memory could obviously have also been many other
             // things.
-            semLocalObjId: `${thisPidPtr}:${instList.length}`,
+            semLocalObjId: `${thisPuidPtr}:${instList.length}`,
             // Dig out the ordering moments...
             constructionMoment: exec.call.meta.entryMoment,
             destructionMoment: null,
@@ -909,14 +938,14 @@ class Analyzer {
           if (exec.data && exec.data.identity) {
             for (const [name, printed] of Object.entries(exec.data.identity)) {
               let rawVal = printed?.value?.data;
-              // Normalize pointers into PidPtrs.
+              // Normalize pointers into PuidPtrs.
               // XXX The grok process can/should retain the type information
               // here and or propagate it upwards into the classInfo so we
               // aren't doing shoddy if reliable hacks here or requiring the
               // config file to contain things that can be inferred.
               let val;
               if (rawVal && rawVal.startsWith('0x')) {
-                val = makePidPtr(exec.call.meta.pid, rawVal);
+                val = makePuidPtr(exec.call.meta.puid, rawVal);
               } else {
                 val = rawVal;
               }
@@ -933,8 +962,8 @@ class Analyzer {
         const { symName, traceDef, execs } = identityTraceResults;
         for (const exec of execs) {
           const thisPtr = extractThisPtrFromIdentity(exec.data.identity);
-          const thisPidPtr = makePidPtr(exec.call.meta.pid, thisPtr);
-          const instList = getInstanceListForPtr(thisPidPtr);
+          const thisPuidPtr = makePuidPtr(exec.call.meta.puid, thisPtr);
+          const instList = getInstanceListForPtr(thisPuidPtr);
 
           const inst = findInstanceBestConstruction(
             instList, exec.call.meta.entryMoment);
@@ -952,14 +981,14 @@ class Analyzer {
               }
 
               let rawVal = printed?.value?.data;
-              // Normalize pointers into PidPtrs.
+              // Normalize pointers into PuidPtrs.
               // XXX The grok process can/should retain the type information
               // here and or propagate it upwards into the classInfo so we
               // aren't doing shoddy if reliable hacks here or requiring the
               // config file to contain things that can be inferred.
               let val;
               if (rawVal && rawVal.startsWith('0x')) {
-                val = makePidPtr(exec.call.meta.pid, rawVal);
+                val = makePuidPtr(exec.call.meta.puid, rawVal);
               } else {
                 val = rawVal;
               }
@@ -978,8 +1007,8 @@ class Analyzer {
         const { symName, traceDef, execs } = destructorTraceResults;
         for (const exec of execs) {
           const thisPtr = extractThisPtr(exec.call);
-          const thisPidPtr = makePidPtr(exec.call.meta.pid, thisPtr);
-          const instList = getInstanceListForPtr(thisPidPtr);
+          const thisPuidPtr = makePuidPtr(exec.call.meta.puid, thisPtr);
+          const instList = getInstanceListForPtr(thisPuidPtr);
 
           const inst = findInstanceBestConstruction(
             instList, exec.call.meta.entryMoment);
@@ -995,14 +1024,14 @@ class Analyzer {
           if (exec.data && exec.data.identity) {
             for (const [name, printed] of Object.entries(exec.data.identity)) {
               let rawVal = printed?.value?.data;
-              // Normalize pointers into PidPtrs.
+              // Normalize pointers into PuidPtrs.
               // XXX The grok process can/should retain the type information
               // here and or propagate it upwards into the classInfo so we
               // aren't doing shoddy if reliable hacks here or requiring the
               // config file to contain things that can be inferred.
               let val;
               if (rawVal && rawVal.startsWith('0x')) {
-                val = makePidPtr(exec.call.meta.pid, rawVal);
+                val = makePuidPtr(exec.call.meta.puid, rawVal);
               } else {
                 val = rawVal;
               }
@@ -1021,7 +1050,7 @@ class Analyzer {
     for (const [semType, instanceMap] of this.semTypeToInstanceMap.entries()) {
       const classInfo = this.semTypeToClassInfo.get(semType);
       let linkTypesDefined = false;
-      for (const [pidPtr, instList] of instanceMap.entries()) {
+      for (const [_puidPtr, instList] of instanceMap.entries()) {
         for (const inst of instList) {
           for (const [name, rawIdent] of Object.entries(inst.rawIdentity)) {
             // See if this name corresponds to a semType; if so, we know we
@@ -1073,10 +1102,10 @@ class Analyzer {
         // self-identity link from the execution to its instance.
         if (classInfo.trackLifecycle) {
           const thisPtr = extractThisPtr(exec.call);
-          const thisPidPtr = makePidPtr(exec.call.meta.pid, thisPtr);
+          const thisPuidPtr = makePuidPtr(exec.call.meta.puid, thisPtr);
 
           const linkInst = this._getSemTypeInstance(
-            classInfo.semType, thisPidPtr, exec.call.meta.entryMoment);
+            classInfo.semType, thisPuidPtr, exec.call.meta.entryMoment);
           exec.identityLinks[classInfo.semType] = linkInst;
 
           // XXX In Flux: Propagate state up to the instance as relevant.
@@ -1093,7 +1122,7 @@ class Analyzer {
               let rawVal = printed?.value?.data;
               let val;
               if (rawVal && rawVal.startsWith('0x')) {
-                val = makePidPtr(exec.call.meta.pid, rawVal);
+                val = makePuidPtr(exec.call.meta.puid, rawVal);
               } else {
                 val = rawVal;
               }
@@ -1110,7 +1139,7 @@ class Analyzer {
             let rawVal = printed?.value?.data;
             let val;
             if (rawVal && rawVal.startsWith('0x')) {
-              val = makePidPtr(exec.call.meta.pid, rawVal);
+              val = makePuidPtr(exec.call.meta.puid, rawVal);
             } else {
               val = rawVal;
             }
@@ -1337,12 +1366,12 @@ class Analyzer {
     // This gets keyed by "{parent group id or ROOT}-{method name}-{thread id}".
     const methodTrackMap = new Map();
 
-    for (const { symName, traceDef, execs } of this.traceResultsMap.values()) {
+    const chewTraceExecs = (symName, traceDef, execs) => {
       // Some traces like the identityMethod of 'constructor-exit' trace exist
       // for their extracted data but do not want to be naively shown on the
       // timeline.  (The object lifetime already covers that.)
       if (traceDef.hideFromTimeline) {
-        continue;
+        return;
       }
 
       let methodName = shortSymbolName(symName);
@@ -1394,9 +1423,9 @@ class Analyzer {
         // Create the dedicated swimlane group for the method for the thread
         let trackUniqueId;
         if (identityGroup) {
-          trackUniqueId = `${identityGroup.id}-${methodName}-${exec.call.meta.tid}`;
+          trackUniqueId = `${identityGroup.id}-${methodName}-${exec.call.meta.tuid.serial}-${exec.call.meta.tuid.tid}`;
         } else {
-          trackUniqueId = `ROOT-${methodName}-${exec.call.meta.tid}`;
+          trackUniqueId = `ROOT-${methodName}-${exec.call.meta.tuid.serial}-${exec.call.meta.tuid.tid}`;
         }
         let trackGroup = methodTrackMap.get(trackUniqueId);
         if (!trackGroup) {
@@ -1405,7 +1434,7 @@ class Analyzer {
             // Note: Ideally we could use `subgroupStack` to control stacking of
             // items in this group... but this doesn't work, so we're now having
             // the top-level options "stack" be set to false.
-            content: `${methodName} : ${exec.call.meta.tid}`,
+            content: `${methodName} : ${exec.call.meta.tuid.serial}-${exec.call.meta.tuid.tid}`,
             treeLevel: identityGroup ? identityGroup.treeLevel + 1 : 0,
             parentGroupId: identityGroup ? identityGroup.id : null,
             earliestSeqId: startSeqId,
@@ -1445,6 +1474,15 @@ class Analyzer {
           },
         });
       }
+    }
+
+    for (const { symName, traceDef, execs } of this.traceResultsMap.values()) {
+      // If the trace is only of interest
+      if (traceDef?.rawInfo?.showForActivity) {
+
+      }
+
+      chewTraceExecs(symName, traceDef, execs);
     }
   }
 
@@ -1556,7 +1594,7 @@ class Analyzer {
       };
       semTypeToLiveInstanceMap.set(semType, liveInstances);
 
-      for (const [pidPtr, instList] of instanceMap) {
+      for (const [_puidPtr, instList] of instanceMap) {
         // Find the instance that was most recently live, but which might not
         // be live anymore.  (This is what we do in `_getSemTypeInstance` too,
         // but there we don't care whether the instance is still alive.)
