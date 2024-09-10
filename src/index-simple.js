@@ -462,7 +462,7 @@ function renderTimelineFromAnalysis(analyzer, container) {
   gTimelineData.clear();
 
   analyzer.renderIntoVisJs(gTimelineGroups, gTimelineData);
-  console.log('used analyzer', analyzer);
+  console.log('used analyzer', analyzer, gTimelineGroups);
 
   gTimelineSeek = (moment) => {
     const targetSeqId = analyzer.mapMomentToSeqId(moment);
@@ -483,6 +483,11 @@ function renderTimelineFromAnalysis(analyzer, container) {
 
   renderTimeline(
     container, false, (groupA, groupB) => {
+      // sort priorities descending
+      const priorityDelta = (groupB.priority || 0) - (groupA.priority || 0);
+      if (priorityDelta) {
+        return priorityDelta;
+      }
       return (groupA.earliestSeqId || 0) - (groupB.earliestSeqId || 0);
     });
 }

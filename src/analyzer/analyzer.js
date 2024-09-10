@@ -454,6 +454,8 @@ class Analyzer {
       semTypePieces.push(...config.semTypeToClassInfo);
     }
     this.semTypeToClassInfo = new Map(semTypePieces);
+
+    this.GROUP_BY_PROCESS = true;
   }
 
   _getOrCreateClassResults(classInfo) {
@@ -472,19 +474,36 @@ class Analyzer {
     return classResults;
   }
 
-  _getOrCreateConceptInstance(name, value) {
+  _getOrCreateConceptInstance(name, value, puid) {
     let conceptInstMap = this.conceptToInstanceMap.get(name);
     if (!conceptInstMap) {
       conceptInstMap = new Map();
       this.conceptToInstanceMap.set(name, conceptInstMap);
     }
-    let conceptInst = conceptInstMap.get(value);
+    let instKey;
+    if (this.GROUP_BY_PROCESS) {
+      // We do this even for "$pid" because we want the serial in there but we
+      // don't care to display it, so it's not in the value.
+      instKey = `${normTuid(puid)}-${value}`;
+    } else {
+      instKey = value;
+    }
+    let conceptInst = conceptInstMap.get(instKey);
     if (!conceptInst) {
       conceptInst = {
         semLocalObjId: value,
+        // note that if !GROUP_BY_PROCESS, this will only be accurate for some
+        // of the things anchored under this concept.
+        puid,
         name: value,
         isConcept: true,
+        identityLinks: {},
       };
+
+      if (this.GROUP_BY_PROCESS && name !== "$pid") {
+        conceptInst.identityLinks.$pid = this._getOrCreateConceptInstance("$pid", puid.tid, puid);
+      }
+
       conceptInstMap.set(value, conceptInst);
     }
     return conceptInst;
@@ -523,6 +542,7 @@ class Analyzer {
     const allQueryResults = this.allQueryResults = [];
 
     // ## Phase 0: Get global context info
+    progressCallback("Getting task tree");
     await this._getTaskTree();
 
     // ## Phase 1: Trace methods of interest, noting interesting instances
@@ -551,7 +571,7 @@ class Analyzer {
   }
 
   async _sendAndGrokSimpleQuery(name) {
-    const rows = await client.sendMessageAwaitingReply(
+    const rows = await this.client.sendMessageAwaitingReply(
       'simpleQuery',
       {
         name,
@@ -912,6 +932,8 @@ class Analyzer {
             // underlying memory could obviously have also been many other
             // things.
             semLocalObjId: `${thisPuidPtr}:${instList.length}`,
+            // Retain the process puid for grouping by process
+            puid: exec.call.meta.puid,
             // Dig out the ordering moments...
             constructionMoment: exec.call.meta.entryMoment,
             destructionMoment: null,
@@ -1052,6 +1074,7 @@ class Analyzer {
       let linkTypesDefined = false;
       for (const [_puidPtr, instList] of instanceMap.entries()) {
         for (const inst of instList) {
+          let linked = false;
           for (const [name, rawIdent] of Object.entries(inst.rawIdentity)) {
             // See if this name corresponds to a semType; if so, we know we
             // should be establishing a semType link instead of a concept link.
@@ -1079,12 +1102,16 @@ class Analyzer {
             } else {
               // It's a concept!
               const conceptInst =
-                this._getOrCreateConceptInstance(name, rawIdent);
+                this._getOrCreateConceptInstance(name, rawIdent, inst.puid);
               inst.identityLinks[name] = conceptInst;
               if (!linkTypesDefined) {
                 classInfo.identityLinkTypes[name] = 'concept';
               }
             }
+            linked = true;
+          }
+          if (!linked && this.GROUP_BY_PROCESS) {
+            inst.identityLinks.$pid = this._getOrCreateConceptInstance("$pid", inst.puid.tid, inst.puid);
           }
           linkTypesDefined = true;
         }
@@ -1366,6 +1393,15 @@ class Analyzer {
     // This gets keyed by "{parent group id or ROOT}-{method name}-{thread id}".
     const methodTrackMap = new Map();
 
+    // `showForActivity` has "process" and "thread" modes.  When we're deferring
+    // we cluster the trace execs by their puid or tuid.  For non-deferred
+    // cases
+    let deferring = true;
+    const deferredByProcess = new Map();
+    const deferredByThread = new Map();
+    const processActivity = new Set();
+    const threadActivity = new Set();
+
     const chewTraceExecs = (symName, traceDef, execs) => {
       // Some traces like the identityMethod of 'constructor-exit' trace exist
       // for their extracted data but do not want to be naively shown on the
@@ -1374,8 +1410,54 @@ class Analyzer {
         return;
       }
 
+      // Handle deferring for `showForActivity` if we're in our initial pass
+      // below, but if we're not deferring, we want to know about this tuid/puid
+      // activity.
+      if (deferring && traceDef?.rawInfo?.showForActivity) {
+        const deferMap = traceDef?.rawInfo?.showForActivity === "process" ? deferredByProcess : deferredByThread;
+        const deferProp = traceDef?.rawInfo?.showForActivity === "process" ? "puid" : "tuid";
+
+        const pendingGrouped = new Map();
+
+        // Group the execs by their tuid/puid.
+        for (const exec of execs) {
+          const deferId = normTuid(exec.call.meta[deferProp]);
+          let pendingExecs = pendingGrouped.get(deferId);
+          if (!pendingExecs) {
+            pendingExecs = [exec];
+            pendingGrouped.set(deferId, pendingExecs);
+          } else {
+            pendingExecs.push(exec);
+          }
+        }
+
+        for (const [deferId, pendingExecs] of pendingGrouped.entries()) {
+          let deferredTraceExecs = deferMap.get(deferId);
+          const pendingFull = {
+            symName,
+            traceDef,
+            execs: pendingExecs
+          };
+          if (!deferredTraceExecs) {
+            deferredTraceExecs = [pendingFull];
+            deferMap.set(deferId, deferredTraceExecs);
+          } else {
+            deferredTraceExecs.push(pendingFull);
+          }
+        }
+
+        return;
+      }
+
       let methodName = shortSymbolName(symName);
       for (const exec of execs) {
+        // If we're in the deferring pass and we didn't bail out above, then we
+        // are interested in tracking this process/thread activity.
+        if (deferring) {
+          processActivity.add(normTuid(exec.call.meta.puid));
+          threadActivity.add(normTuid(exec.call.meta.tuid));
+        }
+
         const startSeqId = momentToSeqId.get(exec.call.meta.entryMoment);
 
         let contentPieces = [];
@@ -1420,6 +1502,12 @@ class Analyzer {
           }
         }
 
+        if (!identityGroup && this.GROUP_BY_PROCESS) {
+          const puid = exec.call.meta.puid;
+          const pidConcept = this._getOrCreateConceptInstance("$pid", puid.tid, puid);
+          identityGroup = semGroupGetOrCreateForInstance("$pid", pidConcept, startSeqId);
+        }
+
         // Create the dedicated swimlane group for the method for the thread
         let trackUniqueId;
         if (identityGroup) {
@@ -1438,6 +1526,7 @@ class Analyzer {
             treeLevel: identityGroup ? identityGroup.treeLevel + 1 : 0,
             parentGroupId: identityGroup ? identityGroup.id : null,
             earliestSeqId: startSeqId,
+            priority: traceDef?.rawInfo?.groupPriority || 0,
           };
           methodTrackMap.set(trackUniqueId, trackGroup);
           groups.add(trackGroup);
@@ -1477,12 +1566,33 @@ class Analyzer {
     }
 
     for (const { symName, traceDef, execs } of this.traceResultsMap.values()) {
-      // If the trace is only of interest
-      if (traceDef?.rawInfo?.showForActivity) {
+      chewTraceExecs(symName, traceDef, execs);
+    }
 
+    console.log("deferredByProcess", deferredByProcess);
+    console.log("processActivity", processActivity);
+
+    // Now process the deferred traces that we only want to show for processes
+    // and threads that actually had activity.
+    deferring = false;
+    for (const [procId, traceExecList] of deferredByProcess.entries()) {
+      if (!processActivity.has(procId)) {
+        continue;
       }
 
-      chewTraceExecs(symName, traceDef, execs);
+      for (const { symName, traceDef, execs } of traceExecList) {
+        chewTraceExecs(symName, traceDef, execs);
+      }
+    }
+
+    for (const [procId, traceExecList] of deferredByThread.entries()) {
+      if (!threadActivity.has(procId)) {
+        continue;
+      }
+
+      for (const { symName, traceDef, execs } of traceExecList) {
+        chewTraceExecs(symName, traceDef, execs);
+      }
     }
   }
 

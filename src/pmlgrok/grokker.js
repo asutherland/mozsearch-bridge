@@ -1397,6 +1397,7 @@ export function grokPMLRows(rows, mode) {
 }
 
 export function grokStructured(rows, mode) {
+  console.log('grokStructured', rows, mode);
   const ctx = new GrokContext();
   const results = [];
 
@@ -1425,14 +1426,14 @@ export function grokStructured(rows, mode) {
         if (row.items.length > 1) {
           throw new Error("Too many items!");
         }
-        if (row.items[0].t !== rootType) {
-          throw new Error(`Root item has type ${checkRows.items[0].t} but should have ${rootType}`);
+        if (row.items[0]?.pml?.t !== rootType) {
+          throw new Error(`Root item has type ${row.items[0].pml.t} but should have ${rootType}`);
         }
-        result = row.items[0];
+        result = row.items[0].pml;
       }
     }
 
-    if (!itemsRows || !result) {
+    if (!itemRows || !result) {
       throw new Error("No items rows!");
     }
     return result;

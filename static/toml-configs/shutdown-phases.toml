@@ -4,5 +4,8 @@ namespace.prefix = "mozilla::"
 # This happens in every process, but we only want to show this context when we
 # are showing something happening in the process for other reasons.
 showForActivity = "process"
+# The shutdown phase context is most useful up top.  (Of course, even better
+# would be custom display stuff.)
+groupPriority = 100
 [trace."AppShutdown::AdvanceShutdownPhase".capture]
 phase.eval = "aPhase"
