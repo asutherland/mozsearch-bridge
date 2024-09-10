@@ -37,6 +37,13 @@ let client = new BridgeClient({
 });
 
 /**
+ * Normalize a tuid into a string so that we can use it for key purposes.
+ */
+function normTuid(tuid) {
+  return `${tuid.serial}-${tuid.tid}`;
+}
+
+/**
  * This produces nightmarish reflows; reproduction distilled with profile at
  * https://bugzilla.mozilla.org/show_bug.cgi?id=1591366#c6
  */
@@ -375,7 +382,9 @@ function renderTimelineFromRows(rows, container) {
         printed = call.printed;
         call = call.queried;
       }
-      const { pid, tid } = call.meta;
+      const { puid, tuid } = call.meta;
+      const pid = normTuid(puid);
+      const tid = normTuid(tuid);
       let pidGroup = groups.get(pid);
       if (!pidGroup) {
         pidGroup = {
