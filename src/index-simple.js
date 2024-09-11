@@ -5,7 +5,7 @@ import { DataSet } from "vis-data/peer";
 
 import { loadAnalyzer } from './analyzer/analyzer.js';
 
-import { grokPML, grokPMLRows } from './pmlgrok/grokker.js';
+import { grokPML, grokPMLRows, normalizePmlPayload } from './pmlgrok/grokker.js';
 
 console.log('app js loaded');
 
@@ -13,6 +13,7 @@ let gMoment;
 
 let gNextReqId = 1;
 let client = new BridgeClient({
+  normalizeReceivedPayload: normalizePmlPayload,
   onStatusReport(statusReport) {
     console.log("Got status report:", statusReport);
     const statusElem = document.getElementById('status-content');
@@ -636,6 +637,49 @@ async function queryExecutions(symName, print) {
   }
 }
 
+async function queryStdouterr() {
+  const eOutput = document.getElementById('output-content');
+  // This is our brand for ensuring we still should be the one outputting there.
+  const reqId = eOutput.reqId = gNextReqId++;
+
+  const results = await client.sendMessageAwaitingReply(
+    'rangeQuery',
+    {
+      name: 'stdouterr',
+      limit: 50,
+      mixArgs: {
+        params: {},
+      },
+    });
+
+  let mode = "stdouterr"
+
+  if (eOutput.reqId === reqId) {
+    prettifyQueryResultsInto(results, eOutput, mode);
+  }
+}
+
+// note there's also "complete-frame" which finds the source code for the
+// current moment.
+async function queryStack() {
+  const eOutput = document.getElementById('output-content');
+  // This is our brand for ensuring we still should be the one outputting there.
+  const reqId = eOutput.reqId = gNextReqId++;
+
+  const results = await client.sendMessageAwaitingReply(
+    'simpleQuery',
+    {
+      name: 'stack',
+      mixArgs: {
+        params: {}
+      },
+    });
+
+  if (eOutput.reqId === reqId) {
+    prettifyQueryResultsInto(results, eOutput, 'stack');
+  }
+}
+
 async function queryCurrentTasks() {
   const eOutput = document.getElementById('output-content');
   // This is our brand for ensuring we still should be the one outputting there.
@@ -989,6 +1033,14 @@ window.addEventListener('load', () => {
 
   document.getElementById('show-task-tree').addEventListener('click', (evt) => {
     queryTaskTree();
+  });
+
+  document.getElementById('show-stack').addEventListener('click', (evt) => {
+    queryStack();
+  });
+
+  document.getElementById('show-stdouterr').addEventListener('click', (evt) => {
+    queryStdouterr();
   });
 
   document.getElementById('analyze-run').addEventListener('click', (evt) => {

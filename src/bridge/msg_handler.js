@@ -74,6 +74,12 @@ export class MessageHandler {
     return promise;
   }
 
+  // This is a hook to allow for normalization of PML responses, in particular,
+  // matching up "parent"-having items with "containerId" mount-points.
+  _normalizeReceivedPayload(payload) {
+    return payload;
+  }
+
   _sendMessageAwaitingReply(type, payload, replyId) {
     if (!this.port) {
       this.#awaitingPortQueue.push({ type, payload, replyId });
@@ -98,7 +104,8 @@ export class MessageHandler {
         return;
       }
       const { resolve } = this.#awaitingReplyPromises.get(msg.msgId);
-      resolve(msg.payload);
+
+      resolve(this._normalizeReceivedPayload(msg.payload));
       this.#awaitingReplyPromises.delete(msg.msgId);
       return;
     }

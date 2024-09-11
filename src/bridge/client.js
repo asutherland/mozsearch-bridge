@@ -5,7 +5,7 @@
 import { RuntimeConnectIssuingHandler } from './msg_handler.js';
 
 export class BridgeClient extends RuntimeConnectIssuingHandler {
-  constructor({ onStatusReport }) {
+  constructor({ onStatusReport, normalizeReceivedPayload }) {
     // This is fairly hacky, but to start, we just tunnel the session id through
     // the hash, but we probably should be trying to use a tab weakmap or
     // equivalent.  That would help with the reloads.
@@ -15,6 +15,9 @@ export class BridgeClient extends RuntimeConnectIssuingHandler {
     this.statusReport = null;
 
     this.onStatusReport = onStatusReport;
+    if (normalizeReceivedPayload) {
+      this._normalizeReceivedPayload = normalizeReceivedPayload;
+    }
   }
 
   setFocus(focus) {

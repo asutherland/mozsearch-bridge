@@ -17,6 +17,10 @@
  * - "derefable": documented, seems to just be a marker.
  **/
 
+/**
+ * Magic value for grokkers to indicate no content.
+ */
+const GROKKED_OMIT = {};
 
 /**
  * Maintains a contextual stack for collecting hierarchical information that
@@ -39,6 +43,23 @@
  * want that.  Some base-case specialization may also be needed for the object
  * case since it doesn't look like we have the "memory" producer for the depth=0
  * case, we just redundantly get the data for each depth=1 case?
+ *
+ * ## containerId and parent values
+ *
+ * A neat trick of the PML representation is that content can be filled into
+ * place later through use of a "containerId" attribute on PML nodes, which
+ * then is provided on an item with a "parent" value matching the containerId.
+ * This seems to be used with "elided" which results in expandible ellipsis
+ * which avoids visual churn as the data is asynchronously filled in.
+ *
+ * For simplicity of implementation, it is assumed that we will have normalized
+ * the PML by first walking all items with a "parent" and saving them in a map,
+ * then we walk through all non-parented nodes looking for containerId
+ * attributes and applying those fixes.
+ *
+ * Note that the "elided" annotation is orthogonal to this; it can be used
+ * independently from use of "containerId".  For example, "stack" uses it to
+ * hide the namespaces which are included directly.
  */
 class GrokContext {
   constructor() {
@@ -79,7 +100,7 @@ class GrokContext {
     if (!pml || !pml.c) {
       return false;
     }
-    return (pml.c.length === 1 && typeof(pml.c[0]) === childType);
+    return (pml.c.length === 1 && pml?.t === childType);
   }
 
   pickFirstChildOfType(pml, childType) {
@@ -294,6 +315,10 @@ class GrokContext {
   }
 
   runGrokkerOnNode(grokker, node, position=undefined) {
+    if (!grokker) {
+      this.warn("Attempting to use falsey grokker", grokker, "on node", node);
+      return {};
+    }
     this.stack.push({ grokker, node, position });
     const result = grokker(node, this);
     if (this.verbose) {
@@ -364,6 +389,7 @@ class GrokContext {
       if (this.verbose) {
         this.log("considering", typeof(node), node, "with", handler, "and next", nextHandler);
       }
+
       // ## Is this PML node a string?
       if (typeof(node) === "string") {
         // normalize off any whitespace.
@@ -445,14 +471,22 @@ class GrokContext {
             flattenCurrentNode();
           }
         }
-        curValue.push(this.runGrokkerOnNode(handler.grokker, node, `${handler.name}@${iNode}`));
+
+        const grokkedValue = this.runGrokkerOnNode(handler.grokker, node, `${handler.name}@${iNode}`);
+        if (grokkedValue !== GROKKED_OMIT) {
+          curValue.push(grokkedValue);
+        }
+
         // We don't advance but we do mark that we processed something and are
         // now expecting a delimiter.
         handlerProcessed++;
         expectingHandlerDelim = true;
       } else {
         // If the thing can't recur, advance.
-        resultObj[handler.name] = this.runGrokkerOnNode(handler.grokker, node, `${handler.name}@${iNode}`);
+        const grokkedValue = this.runGrokkerOnNode(handler.grokker, node, `${handler.name}@${iNode}`);
+        if (grokkedValue !== GROKKED_OMIT) {
+          resultObj[handler.name] = grokkedValue;
+        }
         advanceHandler();
       }
     }
@@ -760,6 +794,20 @@ function grokPrinted(pml, ctx) {
   };
 }
 
+// Stack frames have a useless human readable description that looks like this:
+// - t=inline
+//   - " at "
+//   - t=inline
+//     - t=ident a={title="full original source path"}
+//       - "FilenameOnly.ext"
+//     - ":NUMBER"
+//
+// We just ignore its contents because the parent inline node includes the
+// information in a more useful form in its "source" attribute.
+function grokStackAtSourceFileAndLine(pml, ctx) {
+  return GROKKED_OMIT;
+}
+
 function grokSourceLineNumber(pml, ctx) {
   return {
     source: pml.a.source,
@@ -986,6 +1034,21 @@ function grokFunctionArg(pml, ctx) {
   };
 }
 
+function grokFunctionArgList(pml, ctx) {
+  const result = ctx.parsify(
+    pml,
+    [
+      {
+        name: "args",
+        grokker: grokFunctionArg,
+        repeatDelim: ",",
+        allowRepeatedDelim: true,
+      }
+    ]
+  );
+  return result.args;
+}
+
 function grokItemTypeFunction(pml, ctx) {
   const result = ctx.parsify(
     pml,
@@ -997,19 +1060,46 @@ function grokItemTypeFunction(pml, ctx) {
       "(",
       {
         name: "args",
-        grokker: grokFunctionArg,
-        repeatDelim: ",",
-        // Even single argument arguments seem to be nested in a t=inline.
-        // TODO: This normalization implies that maybe we should just have a
-        // specific argument list parser (which can then use parsify).
-        alwaysFlatten: true,
-        allowRepeatedDelim: true,
+        grokker: grokFunctionArgList,
       },
       ")",
       "=",
       {
         name: "rval",
         grokker: grokValue
+      }
+    ]);
+
+  const focusInfo = pml.a.focus;
+  result.meta = {
+    puid: focusInfo.frame.addressSpaceUid.task,
+    tuid: focusInfo.tuid,
+    entryMoment: focusInfo.frame.entryMoment,
+    returnMoment: focusInfo.frame.returnMoment,
+    focusInfo,
+    source: pml.a.source,
+  };
+
+  return result;
+}
+
+function grokStackFrame(pml, ctx) {
+  const result = ctx.parsify(
+    pml,
+    [
+      {
+        name: "func",
+        grokker: grokIdent,
+      },
+      "(",
+      {
+        name: "args",
+        grokker: grokFunctionArgList,
+      },
+      ")",
+      {
+        name: "humanReadableFrame",
+        grokker: grokStackAtSourceFileAndLine
       }
     ]);
 
@@ -1220,9 +1310,8 @@ function findItemType(pml) {
  *
  * TODO: Things will get more complicated when print expressions get involved.
  */
-function grokRootPML(pml, mode, results, focus) {
+function grokRootPML(ctx, pml, mode, results, focus) {
   window.LAST_ROOT_PML = pml;
-  const ctx = new GrokContext();
 
   // XXX I think this was still being speculatively played with previously and
   // the choice of `grokFunctionArg` was either speculative or over-fitting
@@ -1262,6 +1351,15 @@ function grokRootPML(pml, mode, results, focus) {
   }
   if (!pml.c) {
     console.warn("Root PML has no children?", pml);
+    return;
+  }
+
+  if (mode === "stack") {
+    // XXX this all needs to be cleaned up but basically for this case we
+    // expect to be called once per block and the original logic below just
+    // unwraps the t=inline from the t=block that holds the actual content.  The
+    // t=inline has all the info
+    results.push(ctx.runGrokkerOnNode(grokStackFrame, pml.c[0]));
     return;
   }
 
@@ -1376,19 +1474,103 @@ function grokRootPML(pml, mode, results, focus) {
   results.push(result);
 }
 
+export function normalizePmlPayload(payload) {
+  if (!Array.isArray(payload)) {
+    return payload;
+  }
+  // We only want to perform a fix-up if we saw some "parent" entries.
+  const namedRows = [];
+  const unparentedNodes = [];
+  const parentedNodes = new Map();
+  for (const row of payload) {
+    if (!row.items) {
+      if (row.name) {
+        namedRows.push(row);
+      }
+      continue;
+    }
+    for (const node of row.items) {
+      // Note that the parent balue is a string, as is the containerId payload.
+      if (node.parent) {
+        parentedNodes.set(node.parent, node);
+      } else {
+        unparentedNodes.push(node);
+      }
+    }
+  }
+
+  // Just return the payload verbatim if there were no parented nodes.
+  if (parentedNodes.size === 0) {
+    return payload;
+  }
+
+  // Our fixup method just basically walks all the children and checks if there
+  // is a containerId and then applies it by replacing the initial containerId
+  // node.  I initially just added it as a child, but for cases like "stack"
+  // this let to divergence in the structure between the "show executions"
+  // mechanism.  This doesn't matter for the pernosco UI which is only about
+  // presentation, but it's much saner for us if we don't introduce variations
+  // where they don't need to exist.
+  function fixupPml(pml) {
+    const containerId = pml?.a?.containerId;
+    if (containerId) {
+      const contentNode = parentedNodes.get(containerId);
+      // It looks like the container indeed is a container and gets to still
+      // exist.  There is some question of how the context should be handling
+      // this, though.  The structure we end up with is basically:
+      //
+      // - t=inline a={elided: null}
+      //   - t=inline a={containerId: "ID"}
+      //
+      // While parsify can automatically pierce that, there's an argument to be
+      // made to perform the merge on the elided level.  The argument against
+      // that is we're already basically working in pml as it exists, so we
+      // create a variation.  The context helpers already exist to help abstract
+      // things away, and they could abstract this.
+      if (contentNode) {
+        return contentNode.pml;
+      }
+    }
+
+    if (pml.c) {
+      for (let iNode = 0; iNode < pml.c.length; iNode++) {
+        const kid = pml.c[iNode];
+        const replacement = fixupPml(kid);
+        if (replacement) {
+          pml.c[iNode] = replacement;
+        }
+      }
+    }
+  }
+
+  const transformedRows = namedRows.concat();
+  const transformedItems = [];
+  for (const node of unparentedNodes) {
+    if (node.pml) {
+      fixupPml(node.pml);
+    }
+    transformedItems.push(node);
+  }
+  transformedRows.push({ items: transformedItems });
+
+  return transformedRows;
+}
+
 export function grokPML(pml, mode, focus) {
+  const ctx = new GrokContext();
   const results = [];
-  grokRootPML(pml, mode, results, focus);
+  grokRootPML(ctx, pml, mode, results, focus);
   return results[0];
 }
 
 export function grokPMLRows(rows, mode) {
+  const ctx = new GrokContext();
   const results = [];
   for (const row of rows) {
     if (row.items) {
       for (const item of row.items) {
         if (item.pml) {
-          grokRootPML(item.pml, mode, results);
+          grokRootPML(ctx, item.pml, mode, results);
         }
       }
     }
