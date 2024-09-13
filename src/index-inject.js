@@ -117,8 +117,17 @@ async function buildRangeQuery(pclient, mixArgs, limit=50) {
  * Build a query defaulting to being evaluated at the current position in the
  * trace.
  */
-function buildSimpleQuery(pclient, mixArgs) {
+async function buildSimpleQuery(pclient, mixArgs) {
   const queryFocus = Object.assign({}, pclient.focus);
+  // "evaluate" has a context with line/col that needs o/o8 expansions
+  if (mixArgs?.payload?.context) {
+    // get the SourceText
+    const sourceText = await new window.Promise((resolve) => {
+      pclient.requestSource(mixArgs.payload.context[0], true, exportFunction(resolve, window));
+    });
+    const pos = mixArgs.payload.context[1];
+    mixArgs.payload.context[1] = sourceText.wrappedJSObject.originalTextPositionToClientTextReference(cloneData({ lineNumber: pos.l, column: pos.c }));
+  }
   return Object.assign({
     focus: queryFocus,
   }, mixArgs);
@@ -364,7 +373,7 @@ class ContentScriptServer extends BridgeServer {
     console.log('processing simple query for', name);
     let queryId;
     try {
-      const req = buildSimpleQuery(this.pclient, mixArgs);
+      const req = await buildSimpleQuery(this.pclient, mixArgs);
       const handler = new BatchHandler();
       queryId = this.pclient.openQuery(name, cloneData(req), wrapActiveInto(handler));
       const results = await handler.promise;

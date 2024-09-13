@@ -988,8 +988,8 @@ function grokFunctionArgValue(pml, ctx) {
 
   if (ctx.hasWrappingDelims(pml, "{", "}")) {
     return {
-      value: undefined,
-      pretty: ctx.runGrokkerOnNode(grokObject, pml, "wrapped"),
+      value: ctx.runGrokkerOnNode(grokObject, pml, "wrapped"),
+      pretty: undefined,
     };
   }
 
@@ -1083,6 +1083,18 @@ function grokItemTypeFunction(pml, ctx) {
   return result;
 }
 
+/**
+ * ## call start/stop info
+ * There's a bunch of redundant encoding of information around this.  The
+ * basic situation and core logic is:
+ * - t=block a={ extent: {s, e}}
+ *   - t=inline a={ focus }
+ *
+ * extent.s and extent.e are valid focuses for the start and end of the frame
+ * where as the inline focus represents the current actual timestamp.  The
+ * focus moment will be the same through all of the frames in the stack.
+ *
+ */
 function grokStackFrame(pml, ctx) {
   const result = ctx.parsify(
     pml,
@@ -1312,10 +1324,6 @@ function findItemType(pml) {
  */
 function grokRootPML(ctx, pml, mode, results, focus) {
   window.LAST_ROOT_PML = pml;
-
-  // XXX I think this was still being speculatively played with previously and
-  // the choice of `grokFunctionArg` was either speculative or over-fitting
-  // based on the deref expansion not being done correctly.
   if (mode === "evaluate") {
     /*
     const itemType = findItemType(pml);
@@ -1329,9 +1337,29 @@ function grokRootPML(ctx, pml, mode, results, focus) {
       }
 
     }*/
+    let result;
+    result = ctx.runGrokkerOnNode(grokFunctionArgValue, pml, "root-evaluate");
+    results.push(result);
+    return;
+  }
+  if (mode === "search-evaluate") {
+    /*
+    const itemType = findItemType(pml);
+    console.log("Grokking item type:", itemType);
 
     let result;
-    result = ctx.runGrokkerOnNode(grokFunctionArg, pml, "root-evaluate");
+    switch (itemType) {
+      case "function": {
+        result = ctx.runGrokkerOnNode(grokFunctionArg, pml);
+        break;
+      }
+
+    }*/
+    let result;
+    // Not sure what's up with the outer inline, but let's scrape it off.
+    if (ctx.isInline(pml) && ctx.hasSoleChildOfType(pml, "inline")) {
+      result = ctx.runGrokkerOnNode(grokFunctionArg, pml.c[0], "root-evaluate");
+    }
     results.push(result);
     return;
   }
@@ -1355,11 +1383,8 @@ function grokRootPML(ctx, pml, mode, results, focus) {
   }
 
   if (mode === "stack") {
-    // XXX this all needs to be cleaned up but basically for this case we
-    // expect to be called once per block and the original logic below just
-    // unwraps the t=inline from the t=block that holds the actual content.  The
-    // t=inline has all the info
-    results.push(ctx.runGrokkerOnNode(grokStackFrame, pml.c[0]));
+    // the outer t=block has the extent attribute which we need/want
+    results.push(ctx.runGrokkerOnNode(grokStackFrame, pml));
     return;
   }
 

@@ -308,21 +308,11 @@ function grokAndPrettifyInto(node, into, depth=0, mode) {
 function prettifyQueryResults(rowHandler, resultRows, mode) {
   const frag = new DocumentFragment();
 
+  // Note: We used to normalize the lower level "evaluate" rep here, but we now
+  // perform that normalization in the same places we perform the query.
   if (mode === 'analyzed') {
     for (const row of resultRows) {
       rowHandler(row, frag, 0, mode);
-    }
-  } else if (mode === 'evaluate') {
-    // Evaluate returns an array of objects with just "value" as the payload
-    // because they're a fixup to an existing PML tree.
-    //
-    // XXX: querySearchEvaluate which uses a "search" right now re-synthesizes
-    // things into this rep, but the above claim about evaluate may now be
-    // wrong-ish?
-    for (const row of resultRows) {
-      if ('value' in row) {
-        rowHandler(row.value, frag, 0, mode);
-      }
     }
   } else {
     for (const row of resultRows) {
@@ -362,7 +352,7 @@ let gTimelineDataGen = 0;
 
 const EVENT_SCALE = 100;
 
-function renderTimelineFromRows(rows, container) {
+function renderTimelineFromRows(rows, container, mode) {
   // Only process this data if we haven't already processed it.  (We don't want
   // switching between rendering modes to keep adding duplicate data.)
   if (gLastIngestedRows !== rows) {
@@ -602,7 +592,7 @@ function renderCurrentResults() {
     }
 
     case "timeline": {
-      renderTimelineFromRows(resultRows, into);
+      renderTimelineFromRows(resultRows, into, mode);
     }
   }
 
@@ -850,26 +840,23 @@ async function querySearchEvaluate(symName) {
       let pmlNode = pmlUnwrapExplorable(row.action.evaluation.pml);
       // We wrap this to look like what prettifyQueryResults expects for
       // "evaluate".
-      results.push({ value: pmlNode });
+      results.push({ items: [{ pml: pmlNode }] });
     }
   }
 
   if (eOutput.reqId === reqId) {
-    prettifyQueryResultsInto(results, eOutput, 'evaluate');
+    prettifyQueryResultsInto(results, eOutput, 'search-evaluate');
   }
 }
 
 /**
- * XXX not currently usable without the full context, right now use
- * querySearchEvaluate
- *
  * Request an evaluation.  There appear to be the following variations of this:
  * 1. The client requesting an expansion of a `payload` that contains the
  *    server-provided `data` from a previous PML response.
- * 2. Source view hovering, with contents of:
+ * 2. This one: Source view hovering, with contents of:
  *    - "focus": The current UI focus
  *    - "expression": The word that was hovered over in the source.
- *    - "context": [Source URL, line number, 1]
+ *    - "context": [Source URL, { offset }]
  * 3. Typing an expression into the search bar up top (new!)
  */
 async function queryEvaluate(symName) {
@@ -877,7 +864,7 @@ async function queryEvaluate(symName) {
   // This is our brand for ensuring we still should be the one outputting there.
   const reqId = eOutput.reqId = gNextReqId++;
 
-  const results = await client.sendMessageAwaitingReply(
+  const rawResults = await client.sendMessageAwaitingReply(
     'simpleQuery',
     {
       name: 'evaluate',
@@ -885,10 +872,60 @@ async function queryEvaluate(symName) {
         focus: client.statusReport.focus,
         payload: {
           expression: symName,
-          //context: [client.statusReport.source.url, null],
-        }
+          context: [
+            client.statusReport.source.url,
+            {
+              "l": client.statusReport.source.pos.l[0],
+              "c": client.statusReport.source.pos.l[1],
+            }
+          ],
+          language: client.statusReport.source.lang,
+        },
       },
     });
+
+  let results = [];
+  for (const row of rawResults) {
+    results.push({ items: [{ focus: row.focus, pml: row.value }]})
+  }
+  console.log("normalized", rawResults, "into", results);
+
+  if (eOutput.reqId === reqId) {
+    prettifyQueryResultsInto(results, eOutput, 'evaluate');
+  }
+}
+
+// XXX this is just queryEvaluate above which is sad.
+async function queryEvaluateAndWatch(symName) {
+  const eOutput = document.getElementById('output-content');
+  // This is our brand for ensuring we still should be the one outputting there.
+  const reqId = eOutput.reqId = gNextReqId++;
+
+  const rawResults = await client.sendMessageAwaitingReply(
+    'simpleQuery',
+    {
+      name: 'evaluate',
+      mixArgs: {
+        focus: client.statusReport.focus,
+        payload: {
+          expression: symName,
+          context: [
+            client.statusReport.source.url,
+            {
+              "l": client.statusReport.source.pos.l[0],
+              "c": client.statusReport.source.pos.l[1],
+            }
+          ],
+          language: client.statusReport.source.lang,
+        },
+      },
+    });
+
+  let results = [];
+  for (const row of rawResults) {
+    results.push({ items: [{ focus: row.focus, pml: row.value }]})
+  }
+  console.log("normalized", rawResults, "into", results);
 
   if (eOutput.reqId === reqId) {
     prettifyQueryResultsInto(results, eOutput, 'evaluate');
@@ -1010,11 +1047,25 @@ window.addEventListener('load', () => {
     queryExecutions(symName, symPrint);
   });
 
-  document.getElementById('eval-symbol-run').addEventListener('click', (evt) => {
+  document.getElementById('eval-symbol-search').addEventListener('click', (evt) => {
     const eSymName = document.getElementById('eval-symbol-name');
     const symName = eSymName.value;
 
     querySearchEvaluate(symName);
+  });
+
+  document.getElementById('eval-symbol-run').addEventListener('click', (evt) => {
+    const eSymName = document.getElementById('eval-symbol-name');
+    const symName = eSymName.value;
+
+    queryEvaluate(symName);
+  });
+
+  document.getElementById('eval-symbol-watch').addEventListener('click', (evt) => {
+    const eSymName = document.getElementById('eval-symbol-name');
+    const symName = eSymName.value;
+
+    queryEvaluateAndWatch(symName);
   });
 
   document.getElementById('mem-run').addEventListener('click', (evt) => {
