@@ -849,6 +849,28 @@ async function querySearchEvaluate(symName) {
   }
 }
 
+function buildEvalPayload(symName) {
+  return {
+    expression: symName,
+    context: [
+      client.statusReport.source.url,
+      {
+        "l": client.statusReport.source.pos.l[0],
+        "c": client.statusReport.source.pos.l[1],
+      }
+    ],
+    language: client.statusReport.source.lang,
+  };
+}
+
+function normalizeValueToPml(rawResults) {
+  let results = [];
+  for (const row of rawResults) {
+    results.push({ items: [{ focus: row.focus, pml: row.value }]})
+  }
+  return results;
+}
+
 /**
  * Request an evaluation.  There appear to be the following variations of this:
  * 1. The client requesting an expansion of a `payload` that contains the
@@ -870,32 +892,31 @@ async function queryEvaluate(symName) {
       name: 'evaluate',
       mixArgs: {
         focus: client.statusReport.focus,
-        payload: {
-          expression: symName,
-          context: [
-            client.statusReport.source.url,
-            {
-              "l": client.statusReport.source.pos.l[0],
-              "c": client.statusReport.source.pos.l[1],
-            }
-          ],
-          language: client.statusReport.source.lang,
-        },
+        payload: buildEvalPayload(symName),
       },
     });
 
-  let results = [];
-  for (const row of rawResults) {
-    results.push({ items: [{ focus: row.focus, pml: row.value }]})
-  }
-  console.log("normalized", rawResults, "into", results);
-
   if (eOutput.reqId === reqId) {
-    prettifyQueryResultsInto(results, eOutput, 'evaluate');
+    prettifyQueryResultsInto(normalizeValueToPml(rawResults), eOutput, 'evaluate');
   }
 }
 
-// XXX this is just queryEvaluate above which is sad.
+function extractPointerAndTypeFromRawValue(rawResults) {
+  const row = rawResults[0];
+  const grokked = grokPML(row.value, "evaluate");
+  const producer = grokked?.value?.values?.[0]?.producer;
+  if (producer) {
+    let type;
+    if (producer.size === 8) {
+      type = "uint64_t";
+    } else {
+      type = "uint32_t";
+    }
+    return [`0x${producer.address.toString(16)}`, type];
+  }
+  return [null, null];
+}
+
 async function queryEvaluateAndWatch(symName) {
   const eOutput = document.getElementById('output-content');
   // This is our brand for ensuring we still should be the one outputting there.
@@ -907,28 +928,26 @@ async function queryEvaluateAndWatch(symName) {
       name: 'evaluate',
       mixArgs: {
         focus: client.statusReport.focus,
-        payload: {
-          expression: symName,
-          context: [
-            client.statusReport.source.url,
-            {
-              "l": client.statusReport.source.pos.l[0],
-              "c": client.statusReport.source.pos.l[1],
-            }
-          ],
-          language: client.statusReport.source.lang,
+        payload: buildEvalPayload(symName),
+      },
+    });
+
+  const [address, type] = extractPointerAndTypeFromRawValue(rawResults);
+  const results = await client.sendMessageAwaitingReply(
+    'rangeQuery',
+    {
+      name: 'watchpoint',
+      limit: 111,
+      mixArgs: {
+        params: {
+          address,
+          type,
         },
       },
     });
 
-  let results = [];
-  for (const row of rawResults) {
-    results.push({ items: [{ focus: row.focus, pml: row.value }]})
-  }
-  console.log("normalized", rawResults, "into", results);
-
   if (eOutput.reqId === reqId) {
-    prettifyQueryResultsInto(results, eOutput, 'evaluate');
+    prettifyQueryResultsInto(results, eOutput, 'watchpoint');
   }
 }
 

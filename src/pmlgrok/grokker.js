@@ -100,7 +100,7 @@ class GrokContext {
     if (!pml || !pml.c) {
       return false;
     }
-    return (pml.c.length === 1 && pml?.t === childType);
+    return (pml.c.length === 1 && pml.c[0]?.t === childType);
   }
 
   pickFirstChildOfType(pml, childType) {
@@ -304,7 +304,7 @@ class GrokContext {
    * Return true if the PML node has the given first and last literal children.
    */
   hasWrappingDelims(pml, opens, closes) {
-    if (!pml || !pml.c) {
+    if (!pml || !pml.c || pml.c.length < 2) {
       return false;
     }
 
@@ -613,7 +613,10 @@ function grokProducerDwarfVariable(val, ctx) {
  */
 function grokProducerSubrange(val, ctx) {
   // XXX stub
-  return 'subrange';
+  return {
+    address: val.producer.memory.ranges[0].start,
+    size: val.producer.memory.ranges[0].end - val.producer.memory.ranges[0].start,
+  };
 }
 
 /**
@@ -626,7 +629,10 @@ function grokProducerSubrange(val, ctx) {
  */
 function grokProducerMemory(val, ctx) {
   // XXX stub
-  return 'memory';
+  return {
+    address: val.ranges[0].start,
+    size: val.ranges[0].end - val.ranges[0].start,
+  };
 }
 
 /**
@@ -745,7 +751,7 @@ function grokObjectKeyAndValue(pml, ctx) {
 }
 
 function grokValue(pml, ctx) {
-  let data;
+  let data, rawData;
   if (pml.t === "number") {
     // Numbers should be included directly
     data = ctx.getSoleString(pml);
@@ -755,23 +761,36 @@ function grokValue(pml, ctx) {
     if (ctx.hasWrappingDelims(pml, '"', '"') && pml.c[1].t === "str") {
       // There should probably only be a sole string, but handle weirdness.
       data = ctx.getFlattenedString(pml.c[1]);
+    } else if (ctx.hasSoleChildOfType(pml, "number")) {
+      const numKid = pml.c[0];
+      data = ctx.getSoleString(numKid);
+      if (numKid?.a?.numberData?.raw) {
+        rawData = numKid.a.numberData.raw;
+      }
     }
   } else if (pml.t === "ident") {
     data = ctx.getFlattenedString(pml);
   }
 
-  let producer;
-  let renderer;
-  if (pml.a && pml.a.data) {
-    producer = ctx.runGrokkerOnNode(grokProducer, pml.a.data.producer, "producer");
-    renderer = ctx.runGrokkerOnNode(grokRenderer, pml.a.data.renderer, "renderer");
+  const result = {
+    data
+  };
+
+  if (rawData !== undefined) {
+    result.rawData = rawData;
   }
 
-  return {
-    data,
-    //producer,
-    //renderer,
-  };
+  if (pml?.a?.data) {
+    result.producer = ctx.runGrokkerOnNode(grokProducer, pml.a.data.producer, "producer");
+    // renderer is currently useless, so not including it.
+    //result.renderer = ctx.runGrokkerOnNode(grokRenderer, pml.a.data.renderer, "renderer");
+  }
+
+  if (pml?.a?.dataMoment) {
+    result.dataMoment = pml.a.dataMoment;
+  }
+
+  return result;
 }
 
 /**
@@ -909,10 +928,19 @@ function grokCompoundIdent(pml, ctx) {
  *     - t=inline (blue), "{"/"}" wrapped, t=inline comma-delimited "="-split
  */
 function grokFunctionArgName(pml, ctx) {
+  let producer;
+  let renderer;
+  if (pml?.a?.data) {
+    producer = ctx.runGrokkerOnNode(grokProducer, pml.a.data.producer, "producer");
+    renderer = ctx.runGrokkerOnNode(grokRenderer, pml.a.data.renderer, "renderer");
+  }
+
   // ## Simple Case: Just an ident
   if (ctx.isIdent(pml)) {
     return {
       ident: ctx.runGrokkerOnNode(grokIdent, pml, "ident"),
+      producer,
+      renderer,
       value: undefined,
     };
   }
@@ -925,6 +953,8 @@ function grokFunctionArgName(pml, ctx) {
         // name?
         name: ctx.getSoleString(pml),
       },
+      producer,
+      renderer,
       value: undefined,
     };
   }
@@ -933,6 +963,8 @@ function grokFunctionArgName(pml, ctx) {
   if (ctx.isInline(pml) && ctx.isDoubleString(pml) && pml.c[0] === "*") {
     return {
       ident: null,
+      producer,
+      renderer,
       value: pml.c[1]
     };
   }
@@ -948,6 +980,8 @@ function grokFunctionArgName(pml, ctx) {
   if (ctx.isInline(pml) && ctx.hasPairDelim(pml, ".")) {
     return {
       ident: ctx.runGrokkerOnNode(grokCompoundIdent, pml, "ident-compound"),
+      producer,
+      renderer,
       value: undefined,
     };
   }
@@ -956,6 +990,8 @@ function grokFunctionArgName(pml, ctx) {
     return {
       // This could be a simple ident or ?maybe? a compound ident
       ident: ctx.runGrokkerOnNode(grokCompoundIdent, pml.c[0], "ident@0"),
+      producer,
+      renderer,
       value: ctx.runGrokkerOnNode(grokValue, pml.c[2], "value@2"),
     };
   }
@@ -1030,6 +1066,8 @@ function grokFunctionArg(pml, ctx) {
   return {
     ident: namish.ident,
     value: namish.value || valueish.value,
+    producer: namish.producer || valueish.producer,
+    renderer: namish.renderer || valueish.renderer,
     pretty: valueish.pretty,
   };
 }
@@ -1325,36 +1363,12 @@ function findItemType(pml) {
 function grokRootPML(ctx, pml, mode, results, focus) {
   window.LAST_ROOT_PML = pml;
   if (mode === "evaluate") {
-    /*
-    const itemType = findItemType(pml);
-    console.log("Grokking item type:", itemType);
-
-    let result;
-    switch (itemType) {
-      case "function": {
-        result = ctx.runGrokkerOnNode(grokFunctionArg, pml);
-        break;
-      }
-
-    }*/
     let result;
     result = ctx.runGrokkerOnNode(grokFunctionArgValue, pml, "root-evaluate");
     results.push(result);
     return;
   }
   if (mode === "search-evaluate") {
-    /*
-    const itemType = findItemType(pml);
-    console.log("Grokking item type:", itemType);
-
-    let result;
-    switch (itemType) {
-      case "function": {
-        result = ctx.runGrokkerOnNode(grokFunctionArg, pml);
-        break;
-      }
-
-    }*/
     let result;
     // Not sure what's up with the outer inline, but let's scrape it off.
     if (ctx.isInline(pml) && ctx.hasSoleChildOfType(pml, "inline")) {
@@ -1385,6 +1399,13 @@ function grokRootPML(ctx, pml, mode, results, focus) {
   if (mode === "stack") {
     // the outer t=block has the extent attribute which we need/want
     results.push(ctx.runGrokkerOnNode(grokStackFrame, pml));
+    return;
+  }
+  if (mode === "watchpoint") {
+    let result;
+    // pierce the wrapping block to get to the t=inline
+    result = ctx.runGrokkerOnNode(grokValue, pml.c[0], "root-watchpoint");
+    results.push(result);
     return;
   }
 
