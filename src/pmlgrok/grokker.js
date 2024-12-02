@@ -320,9 +320,16 @@ class GrokContext {
       return {};
     }
     this.stack.push({ grokker, node, position });
-    const result = grokker(node, this);
-    if (this.verbose) {
-      this.log("Got", result, "from grokker", grokker, "on", node);
+    let result;
+    try {
+      result = grokker(node, this);
+      if (this.verbose) {
+        this.log("Got", result, "from grokker", grokker, "on", node);
+      }
+    } catch (ex) {
+      this.error("Exception", ex, "from grokker", grokker, "on", node);
+      // re-throw; no point hiding this.
+      throw ex;
     }
     this.stack.pop();
     return result;
@@ -612,11 +619,20 @@ function grokProducerDwarfVariable(val, ctx) {
  *   order), which seems to be the [start, end] of the data in the parent type.
  */
 function grokProducerSubrange(val, ctx) {
-  // XXX stub
-  return {
-    address: val.producer.memory.ranges[0].start,
-    size: val.producer.memory.ranges[0].end - val.producer.memory.ranges[0].start,
-  };
+  if (val.producer?.memory?.ranges.length) {
+    return {
+      address: val.producer.memory.ranges[0].start,
+      size: val.producer.memory.ranges[0].end - val.producer.memory.ranges[0].start,
+    };
+  }
+  if (val.producer?.dwarfVariable?.variable) {
+    return {
+      // we don't have an address, and I think the variable stuff is handles
+      // into DWARF debug info or something like that.
+      size: val.subrange.end - val.subrange.start,
+    }
+  }
+  return {};
 }
 
 /**
@@ -1134,6 +1150,9 @@ function grokItemTypeFunction(pml, ctx) {
  *
  */
 function grokStackFrame(pml, ctx) {
+  const extent = pml.a.extent;
+  // pierce to the inline node which has the rest of what we want.
+  pml = pml.c[0];
   const result = ctx.parsify(
     pml,
     [
@@ -1157,9 +1176,12 @@ function grokStackFrame(pml, ctx) {
   result.meta = {
     puid: focusInfo.frame.addressSpaceUid.task,
     tuid: focusInfo.tuid,
+    // do we want to include these moments given that we have full focuses?
     entryMoment: focusInfo.frame.entryMoment,
     returnMoment: focusInfo.frame.returnMoment,
+    startFocusInfo: extent.s,
     focusInfo,
+    endFocusInfo: extent.e,
     source: pml.a.source,
   };
 

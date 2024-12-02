@@ -1,5 +1,7 @@
 namespace.prefix = "mozilla::dom::"
 
+[trace."ServiceWorkerManager::MaybeStartShutdown"]
+
 [class."ServiceWorkerInfo"]
 semType = "SWInfo"
 lifecycle = true

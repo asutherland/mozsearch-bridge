@@ -951,6 +951,64 @@ async function queryEvaluateAndWatch(symName) {
   }
 }
 
+async function queryEvaluateAndWatchAndRefcountTrace(symName) {
+  const eOutput = document.getElementById('output-content');
+  // This is our brand for ensuring we still should be the one outputting there.
+  const reqId = eOutput.reqId = gNextReqId++;
+
+  const rawResults = await client.sendMessageAwaitingReply(
+    'simpleQuery',
+    {
+      name: 'evaluate',
+      mixArgs: {
+        focus: client.statusReport.focus,
+        payload: buildEvalPayload(symName),
+      },
+    });
+
+  const [address, type] = extractPointerAndTypeFromRawValue(rawResults);
+  const rawWatchResults = await client.sendMessageAwaitingReply(
+    'rangeQuery',
+    {
+      name: 'watchpoint',
+      limit: 111,
+      mixArgs: {
+        params: {
+          address,
+          type,
+        },
+      },
+    });
+
+  // (Now we have the history of the values over time.)
+
+  // ## Figure out the first reasonable starting value sequence
+  //
+  // Ideally when we're going based on the analyzer data we'll have a strictly
+  // bound timeline, but when operating in a heuristic mode, we should see
+  // expect to see a 0 value followed by a 1 value as the start of the valid
+  // sequence.  (And presumably before that, we should see e5 poison.)
+  let useWatchResults;
+  for (let iVal = 1; iVal < rawWatchResults.length; iVal++) {
+    const lastVal = result[iVal - 1].data;
+    const thisVal = result[iVal].data;
+    if (lastVal === "0" && thisVal === "1") {
+      useWatchResults = rawWatchResults.slice(iVal - 1);
+      break;
+    }
+  }
+  if (!useWatchResults) {
+    console.error("failed to find valid start of refcounting!");
+  }
+
+  // ## NEXTSTEP
+
+
+  if (eOutput.reqId === reqId) {
+    prettifyQueryResultsInto(rawWatchResults, eOutput, 'watchpoint');
+  }
+}
+
 let gAnalyzer;
 
 async function runAnalyzer() {
@@ -1085,6 +1143,13 @@ window.addEventListener('load', () => {
     const symName = eSymName.value;
 
     queryEvaluateAndWatch(symName);
+  });
+
+  document.getElementById('eval-symbol-watch-refcount').addEventListener('click', (evt) => {
+    const eSymName = document.getElementById('eval-symbol-name');
+    const symName = eSymName.value;
+
+    queryEvaluateAndWatchAndRefcountTrace(symName);
   });
 
   document.getElementById('mem-run').addEventListener('click', (evt) => {
