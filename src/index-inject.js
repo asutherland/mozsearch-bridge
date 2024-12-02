@@ -72,7 +72,7 @@ async function buildRangeQuery(pclient, mixArgs, limit=50) {
   if (mixArgs?.params?.url && mixArgs?.params?.points) {
     // get the SourceText
     const sourceText = await new window.Promise((resolve) => {
-      pclient.requestSource(mixArgs.params.url, true, exportFunction(resolve, window));
+      pclient.requestSource(mixArgs.params.url, false, exportFunction(resolve, window));
     });
     let transformed = mixArgs.params.points.map(({l, c}) =>
       sourceText.wrappedJSObject.originalTextPositionToClientTextReference(cloneData({ lineNumber: l, column: c}))
@@ -123,7 +123,7 @@ async function buildSimpleQuery(pclient, mixArgs) {
   if (mixArgs?.payload?.context) {
     // get the SourceText
     const sourceText = await new window.Promise((resolve) => {
-      pclient.requestSource(mixArgs.payload.context[0], true, exportFunction(resolve, window));
+      pclient.requestSource(mixArgs.payload.context[0], false, exportFunction(resolve, window));
     });
     const pos = mixArgs.payload.context[1];
     mixArgs.payload.context[1] = sourceText.wrappedJSObject.originalTextPositionToClientTextReference(cloneData({ lineNumber: pos.l, column: pos.c }));
