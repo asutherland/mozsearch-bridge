@@ -385,8 +385,9 @@ class AnalyzerConfig {
 
       let stateDefs;
       if (rawInfo.state) {
+        stateDefs = [];
         for (const [name, capInfo] of Object.entries(rawInfo.state)) {
-          classInfo.stateDefs.push({
+          stateDefs.push({
             name,
             eval: capInfo.eval,
             arg: capInfo.arg,
@@ -474,7 +475,7 @@ class Analyzer {
     return classResults;
   }
 
-  _getOrCreateConceptInstance(name, value, puid) {
+  _getOrCreateConceptInstance(name, value, puid, interesting = true) {
     let conceptInstMap = this.conceptToInstanceMap.get(name);
     if (!conceptInstMap) {
       conceptInstMap = new Map();
@@ -498,13 +499,14 @@ class Analyzer {
         name: value,
         isConcept: true,
         identityLinks: {},
+        interesting,
       };
 
       if (this.GROUP_BY_PROCESS && name !== "$pid") {
         conceptInst.identityLinks.$pid = this._getOrCreateConceptInstance("$pid", puid.tid, puid);
       }
 
-      conceptInstMap.set(value, conceptInst);
+      conceptInstMap.set(instKey, conceptInst);
     }
     return conceptInst;
   }
@@ -1294,6 +1296,8 @@ class Analyzer {
     let nextGroupId = 1;
     let nextDataId = 1;
 
+    const groupsById = new Map();
+
     // A map from semType to a Map from `semLocalObjId` to group.
     const semTypeGroupMaps = new Map();
     const semGroupGetOrCreateForInstance = (semType, inst, startSeqId) => {
@@ -1347,6 +1351,7 @@ class Analyzer {
           },
         };
         groupMap.set(inst.semLocalObjId, group);
+        groupsById.set(group.id, group);
         groups.add(group);
 
         // If this is an instance with a lifetime (AKA non-concept), we want a
@@ -1461,6 +1466,7 @@ class Analyzer {
         const startSeqId = momentToSeqId.get(exec.call.meta.entryMoment);
 
         let contentPieces = [];
+        let groupValues = new Map();
         if (exec.data?.capture) {
           for (const [name, item] of Object.entries(exec.data.capture)) {
             // Skip undefined items.
@@ -1471,13 +1477,25 @@ class Analyzer {
             // XXX I'm not sure why I thought using the pernosco provided name
             // would be better than the explicit name, just using explicit name.
             const useName = name; // (item.name === "???") ? name : item.name;
-            if (item.value && item.value.data) {
+            if (item.value?.data) {
               const maybeMap = traceDef?.rawInfo?.capture?.[name]?.map;
+              const maybeRegex = traceDef?.rawInfo?.capture?.[name]?.regex;
+              let useData = item.value.data;
               if (maybeMap) {
-                contentPieces.push(`${useName}: ${maybeMap[item.value.data]}`);
-              } else {
-                contentPieces.push(`${useName}: ${item.value.data}`);
+                useData = maybeMap[useData];
+              } else if (maybeRegex) {
+                try {
+                  let regex = new RegExp(maybeRegex);
+                  let match = regex.exec(useData);
+                  if (match && match[1] !== undefined) {
+                    useData = match[1];
+                  }
+                } catch (ex) {
+                  console.warn("Unhappy regex:", maybeRegex, ex);
+                }
               }
+              contentPieces.push(`${useName}: ${useData}`);
+              groupValues.set(useName, useData);
             }
           }
         }
@@ -1486,19 +1504,43 @@ class Analyzer {
             // XXX I'm not sure why I thought using the pernosco provided name
             // would be better than the explicit name, just using explicit name.
             const useName = name; // (item.name === "???") ? name : item.name;
-            if (item.value && item.value.data) {
+            let useData = item?.value?.data;
+            if (useData) {
               contentPieces.push(`${useName}: ${item.value.data}`);
+              groupValues.set(useName, useData);
             }
           }
         }
 
         let identityGroup = null;
-        for (const [name, linkInst] of Object.entries(exec.identityLinks)) {
-          if (!identityGroup && linkInst) {
-            identityGroup = semGroupGetOrCreateForInstance(name, linkInst, startSeqId);
-          } else if (linkInst) {
-            // Actually this maybe wants to induce additional tupling?
-            contentPieces.push(`${name}: ${linkInst.semLocalObjId}`);
+
+        // If this trace explicitly wants to be associated with a group, then
+        // prefer that over any identity links associated with the execution.
+        //
+        // TODO: Integrate this with the object/identity mechanism.
+        if (traceDef?.rawInfo?.group) {
+          let groupDef = traceDef.rawInfo.group;
+          let groupValue = groupDef.replaceAll(/\$\{([^}]+)\}/g, (_m, groupName) => {
+            return groupValues.get(groupName);
+          });
+          const puid = exec.call.meta.puid;
+          // By default we mark the group as not interesting unless this specific
+          // trace has "interesting" set to true.
+          let groupConcept = this._getOrCreateConceptInstance("group", groupValue, puid, false);
+          if (traceDef.rawInfo.interesting) {
+            groupConcept.interesting = true;
+            console.log("setting group concept to interesting", groupConcept);
+          }
+          identityGroup = semGroupGetOrCreateForInstance("group", groupConcept, startSeqId);
+        } else {
+          for (const [name, linkInst] of Object.entries(exec.identityLinks)) {
+            if (!identityGroup && linkInst) {
+              identityGroup = semGroupGetOrCreateForInstance(name, linkInst, startSeqId);
+            } else if (linkInst) {
+              // Actually this maybe wants to induce additional tupling?
+              contentPieces.push(`${name}: ${linkInst.semLocalObjId}`);
+              groupValues.set(name, linkInst.semLocalObjId);
+            }
           }
         }
 
@@ -1529,6 +1571,7 @@ class Analyzer {
             priority: traceDef?.rawInfo?.groupPriority || 0,
           };
           methodTrackMap.set(trackUniqueId, trackGroup);
+          groupsById.set(trackGroup.id, trackGroup);
           groups.add(trackGroup);
           if (identityGroup) {
             identityGroup.nestedGroups.push(trackGroup.id);
@@ -1592,6 +1635,35 @@ class Analyzer {
 
       for (const { symName, traceDef, execs } of traceExecList) {
         chewTraceExecs(symName, traceDef, execs);
+      }
+    }
+
+    // ### "Group" Interestingness processing; hide boring groups
+    // (not a great name; maybe a better semantic hierarchy would be nice)
+    let groupSemGroupMap = semTypeGroupMaps.get("group");
+    if (groupSemGroupMap) {
+      // Walk all of the semantic "group" groups we created, reaching into the
+      // underlying instance we created that has the "interesting" flag.  If
+      // it's false, mark the group as not visible.
+      console.log("GROUP HIDING PASS FOR", groupSemGroupMap);
+      for (const semGroup of groupSemGroupMap.values()) {
+        if (!semGroup.extra?.inst?.interesting) {
+          semGroup.visible = false;
+          semGroup.showNested = false;
+          //console.log("  hiding", semGroup);
+          /*
+          if (semGroup.parentGroupId) {
+            const parentGroup = groupsById.get(semGroup.parentGroupId);
+            if (!parentGroup.subgroupVisibility) {
+              parentGroup.subgroupVisibility = {};
+            }
+            parentGroup.subgroupVisibility[semGroup.id] = false;
+            console.log("hiding", semGroup, "in parent", parentGroup);
+          }
+          */
+        } else {
+          console.log("  interesting, retaining", semGroup);
+        }
       }
     }
   }

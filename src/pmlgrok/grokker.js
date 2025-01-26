@@ -812,11 +812,27 @@ function grokValue(pml, ctx) {
 /**
  * Process the results of an "executions of" "print" arg results.
  *
- * We currently expect these to be an inline with "data" and "dataMoment"
+ * In simple cases, we expect these to be an inline with "data" and "dataMoment"
  * attributes that wraps an inline that is the actual printable result.
+ *
+ * But in a more complex case like
+ * `aSource->mClientInfo.mData->id_.mVal.ToString()`
+ * (for ClientManagerService::AddSource) where we have a complex return type
+ * (`nsIDToCString` is an object with `char mStringBytes[NSID_LENGTH];`) we may
+ * see an object structure.
  */
 function grokPrinted(pml, ctx) {
   if (!ctx.isInline(pml) || pml.c.length !== 1) {
+    let asObj = ctx.runGrokkerOnNode(grokObject, pml, "printed");
+
+    if (asObj?.values) {
+      if (asObj.values.length === 1) {
+        return asObj.values[0];
+      }
+
+      return asObj;
+    }
+
     return "weird print";
   }
 
@@ -1067,7 +1083,7 @@ function grokFunctionArgValue(pml, ctx) {
  * [[left, "="], right].  Presumably this is done to bias the line-wrapping
  * behavior.
  */
-function grokFunctionArg(pml, ctx) {
+function  grokFunctionArg(pml, ctx) {
   const { left, delim, right } = ctx.splitPairDelimShapes(pml);
   if (!delim) {
     return null;

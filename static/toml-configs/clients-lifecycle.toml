@@ -1,0 +1,52 @@
+namespace.prefix = "mozilla::dom::"
+
+[trace."ClientManagerService::AddSource"]
+group = "${clientId}"
+[trace."ClientManagerService::AddSource".capture]
+# We have the pernosco server do a forky evaluation for us; this is slow but
+# maybe not
+clientId.eval = "aSource->mClientInfo.mData->id_.mVal.ToString()"
+clientId.regex = "^{([^}]+)}$"
+
+[trace."ClientManagerService::RemoveSource"]
+group = "${clientId}"
+[trace."ClientManagerService::RemoveSource".capture]
+clientId.eval = "aSource->mClientInfo.mData->id_.mVal.ToString()"
+clientId.regex = "^{([^}]+)}$"
+
+[trace."ClientManagerService::ExpectFutureSource"]
+group = "${clientId}"
+[trace."ClientManagerService::ExpectFutureSource".capture]
+clientId.eval = "aClientInfo.id_.mVal.ToString()"
+clientId.regex = "^{([^}]+)}$"
+
+[trace."ClientManagerService::ForgetFutureSource"]
+group = "${clientId}"
+[trace."ClientManagerService::ForgetFutureSource".capture]
+clientId.eval = "aClientInfo.id_.mVal.ToString()"
+clientId.regex = "^{([^}]+)}$"
+
+[trace."ClientManagerService::GetInfoAndState"]
+group = "${clientId}"
+# This is what will make this group visible; groups not marked interesting will
+# be hidden.
+interesting = true
+[trace."ClientManagerService::GetInfoAndState".capture]
+clientId.eval = "aArgs.id_.mVal.ToString()"
+clientId.regex = "^{([^}]+)}$"
+
+[trace."ClientSource::WorkerExecutionReady"]
+group = "${clientId}"
+interesting = true
+[trace."ClientSource::WorkerExecutionReady".capture]
+clientId.eval = "mClientInfo.mData->id_.mVal.ToString()"
+clientId.regex = "^{([^}]+)}$"
+
+# XXX this should probably be based off the identity mechanism?
+[trace."ClientSourceParent::RecvExecutionReady"]
+group = "${clientId}"
+[trace."ClientSourceParent::RecvExecutionReady".capture]
+clientId.eval = "mClientInfo.mData->id_.mVal.ToString()"
+clientId.regex = "^{([^}]+)}$"
+# and this in particular could be part of the identity?
+url.eval = "aArgs.url_.mData"

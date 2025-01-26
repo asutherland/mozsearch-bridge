@@ -1021,9 +1021,10 @@ async function runAnalyzer() {
   eStatus.textContent = '';
 
   const analyzer = gAnalyzer = await loadAnalyzer([
-    'toml-configs/shutdown-phases.toml',
+     //'toml-configs/shutdown-phases.toml',
     //'toml-configs/sw-lifecycle.toml',
-    'toml-configs/swp-lifecycle.toml',
+     //'toml-configs/swp-lifecycle.toml',
+    'toml-configs/clients-lifecycle.toml',
     //'toml-configs/document-channel.toml'
     //'toml-configs/browsing-context.toml',
     //'toml-configs/canonical-browsing-context.toml',
