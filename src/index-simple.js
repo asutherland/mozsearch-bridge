@@ -45,39 +45,6 @@ function normTuid(tuid) {
 }
 
 /**
- * This produces nightmarish reflows; reproduction distilled with profile at
- * https://bugzilla.mozilla.org/show_bug.cgi?id=1591366#c6
- */
-function prettifyDataLayoutNightmare(data, depth=0) {
-  const dataElem = document.createElement('div');
-  dataElem.setAttribute('class', 'pda-nightmare-data');
-
-  if (!data) {
-    dataElem.textContent = JSON.stringify(data);
-    return dataElem;
-  }
-
-  for (let [key, value] of Object.entries(data)) {
-    const keyElem = document.createElement('div');
-    keyElem.setAttribute('class', `pda-data-key pda-data-key-depth-${depth}`);
-    keyElem.textContent = key;
-    dataElem.appendChild(keyElem);
-
-    let valueElem;
-    if (typeof(value) === 'object') {
-      valueElem = prettifyData(value, depth + 1);
-    } else {
-      valueElem = document.createElement('div');
-      valueElem.textContent = JSON.stringify(value, null, 2);
-    }
-    valueElem.classList.add('pda-data-value');
-    dataElem.appendChild(valueElem);
-  }
-
-  return dataElem;
-}
-
-/**
  * Helper to flatten a hierarchical object structure to a single-depth table.
  * We know that the visual presentation will be one leaf node per row on the
  * right, with non-leaf nodes spanning multiple rows.
@@ -165,8 +132,8 @@ class TableMaker {
 }
 
 /**
- * More layout-friendly version that builds a single table using the above
- * TableMaker.
+ * Layout-friendly data prettifier.  (Layout-unfriendly version was removed but
+ * lives on in https://bugzilla.mozilla.org/show_bug.cgi?id=1591366#c6.)
  */
 function prettifyData(dataRoot) {
   const tableMaker = new TableMaker();
@@ -329,6 +296,42 @@ function prettifyQueryResults(rowHandler, resultRows, mode) {
   return frag;
 }
 
+/**
+ * Prettify pernosco pml log view output with numbered rows on the left where
+ * clicking on the row will seek to the focus associated with the log.
+ */
+function prettifyLogs(resultRows) {
+  const fragment = new DocumentFragment();
+
+  let index = 0;
+  for (const row of resultRows) {
+    const curIndex = index++;
+
+    const ePre = document.createElement('pre');
+
+    const ePrefix = document.createElement('span');
+    ePrefix.setAttribute('class', 'pda-focus');
+    ePrefix.textContent = curIndex.toString(10).padStart(8) + " ";
+    ePre.appendChild(ePrefix);
+
+    if (row.items) {
+      for (const item of row.items) {
+        if (item.focus) {
+          ePre.usingFocus = item.focus;
+        }
+        const text = document.createTextNode(item?.pml?.c?.[0]?.c?.[0]);
+        ePre.appendChild(text);
+      }
+    } else {
+      ePre.appendChild(document.createTextNode("\n"));
+    }
+
+    fragment.appendChild(ePre);
+  }
+
+  return fragment;
+}
+
 function renderRawJSON(resultRows) {
   const c = document.createElement('pre');
   c.textContent = JSON.stringify(resultRows, null, 2);
@@ -352,6 +355,9 @@ let gTimelineDataGen = 0;
 
 const EVENT_SCALE = 100;
 
+// Given a bunch of trace results rows, render them into a timeline.  Compare
+// with `renderTimelineFromAnalysis` which renders the derived hierarchical
+// object lifetimes from `analyzer.js`.
 function renderTimelineFromRows(rows, container, mode) {
   // Only process this data if we haven't already processed it.  (We don't want
   // switching between rendering modes to keep adding duplicate data.)
@@ -425,6 +431,8 @@ function renderTimelineFromRows(rows, container, mode) {
     }
   }
 
+  // Our client listener looks for this global and will invoke it when the
+  // pernosco session is seeked, allowing us to remain synchronized.
   gTimelineSeek = (moment) => {
     // Set the marker for the current focus point.
     gTimeline.setCustomTime(moment.event, "focus");
@@ -483,6 +491,7 @@ function renderTimelineFromAnalysis(analyzer, container) {
     });
 }
 
+// Common timeline rendering helper, invoked by other renderTimeline* funcs.
 function renderTimeline(container, doStack=true, groupOrder) {
   console.log('rendering timeline using groups', gTimelineGroups, 'data', gTimelineData);
 
@@ -586,8 +595,18 @@ function renderCurrentResults() {
       break;
     }
 
+    case "logs": {
+      frag = prettifyLogs(resultRows, mode);
+      break;
+    }
+
     case "raw": {
       frag = renderRawJSON(resultRows, mode);
+      break;
+    }
+
+    case "lineup": {
+      // TODO: implementing lineup hookup here.
       break;
     }
 
@@ -611,7 +630,7 @@ async function queryExecutions(symName, print) {
     'rangeQuery',
     {
       name: 'execution',
-      limit: 50,
+      limit: 250,
       mixArgs: {
         params: {
           symbol: symName,
@@ -636,13 +655,35 @@ async function queryStdouterr() {
     'rangeQuery',
     {
       name: 'stdouterr',
-      limit: 50,
+      limit: 5000,
       mixArgs: {
         params: {},
       },
     });
 
-  let mode = "stdouterr"
+  let mode = "logs";
+
+  if (eOutput.reqId === reqId) {
+    prettifyQueryResultsInto(results, eOutput, mode);
+  }
+}
+
+async function queryLogs() {
+  const eOutput = document.getElementById('output-content');
+  // This is our brand for ensuring we still should be the one outputting there.
+  const reqId = eOutput.reqId = gNextReqId++;
+
+  const results = await client.sendMessageAwaitingReply(
+    'rangeQuery',
+    {
+      name: 'microdiversionsLog',
+      limit: 5000,
+      mixArgs: {
+        params: {},
+      },
+    });
+
+  let mode = "logs";
 
   if (eOutput.reqId === reqId) {
     prettifyQueryResultsInto(results, eOutput, mode);
@@ -1022,8 +1063,8 @@ async function runAnalyzer() {
 
   const analyzer = gAnalyzer = await loadAnalyzer([
      //'toml-configs/shutdown-phases.toml',
-    //'toml-configs/sw-lifecycle.toml',
-     //'toml-configs/swp-lifecycle.toml',
+    'toml-configs/sw-lifecycle.toml',
+    'toml-configs/swp-lifecycle.toml',
     'toml-configs/clients-lifecycle.toml',
     //'toml-configs/document-channel.toml'
     //'toml-configs/browsing-context.toml',
@@ -1045,6 +1086,7 @@ async function runAnalyzer() {
   }
 }
 
+// BROKEN: Removed the graphviz WASM/asm.js dep, so we no longer have graphviz.
 async function runVisualizer() {
   if (gAnalyzer) {
     const dotSrc = gAnalyzer.renderSemTypeInstancesToDot(
@@ -1115,7 +1157,7 @@ function showTab(newHeaderElem) {
 }
 
 window.addEventListener('load', () => {
-  document.getElementById('show-symbol').addEventListener('click', (evt) => {
+  document.getElementById('show-symbol-executions').addEventListener('click', (evt) => {
     const eSymName = document.getElementById('symbol-name');
     const symName = eSymName.value;
 
@@ -1179,6 +1221,10 @@ window.addEventListener('load', () => {
     queryStdouterr();
   });
 
+  document.getElementById('show-logs').addEventListener('click', (evt) => {
+    queryLogs();
+  });
+
   document.getElementById('analyze-run').addEventListener('click', (evt) => {
     runAnalyzer();
   });
@@ -1198,14 +1244,15 @@ window.addEventListener('load', () => {
   document.getElementById('output-content').addEventListener('click', (evt) => {
     console.log('Processing click of', evt.target);
 
-    // Handle focus clicks by logging them
+    // Handle focus clicks
     if (evt.target.classList.contains('pda-focus')) {
       evt.preventDefault();
       evt.stopPropagation();
 
       let focus = findClosestFocus(evt.target);
       if (focus) {
-        console.log("Clicked on focus", focus);
+        console.log("Trying to focus", focus);
+        client.setFocus(focus);
       }
       return;
     }

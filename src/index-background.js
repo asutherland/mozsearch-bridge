@@ -54,12 +54,23 @@ async function showSimpleUI(pernoscoTab) {
   });
   console.log("Content script loaded.");
 
+  // Pernosco URLs look like: https://pernos.co/debug/ps0J9-pJ2TxCDiz5XJu-2g/index.html#HASH
+  let pernoscoUrl = new URL(pernoscoTab.url);
+  let traceName = pernoscoUrl.pathname.split("/")[2];
+  console.log("Opening tab for: Trace name", traceName, "Session name", sessionName);
+
+  let uiUrlParams = new URLSearchParams();
+  uiUrlParams.append("sess", sessionName);
+  uiUrlParams.append("trace", traceName);
+
+  const uiUrl = `/simple.html?${uiUrlParams.toString()}`;
+  console.log("Opening UI URL", uiUrl);
   let uiTab = await browser.tabs.create({
     active: true,
     // XXX the intent here is to enable TreeStyleTab to group the new tab with
     // the pernosco tab, not sure if this works...
     openerTabId: pernoscoTab.id,
-    url: `/simple.html#${sessionName}`
+    url: uiUrl,
   });
 
   let uiPort = await waitForNamedPort(sessionName);

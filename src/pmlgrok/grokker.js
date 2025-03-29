@@ -103,6 +103,19 @@ class GrokContext {
     return (pml.c.length === 1 && pml.c[0]?.t === childType);
   }
 
+  firstChildIsStringAndStartsWith(pml, prefix) {
+    if (!pml || !pml.c || pml.c.length === 0) {
+      return false;
+    }
+    // Okay, so we have at least one child.
+    const firstChild = pml.c[0];
+    if (firstChild?.t === "str" && firstChild?.c?.length) {
+      return firstChild.c[0].startsWith(prefix);
+    }
+    // should we handle there just being a raw string in here?
+    return false;
+  }
+
   pickFirstChildOfType(pml, childType) {
     if (!pml || !pml.c) {
       return null;
@@ -1243,22 +1256,12 @@ function grokBreakpointHit(pml, ctx) {
  *
  * For "task-tree", we also observe:
  * - Nodes will either be describing a "process" or a "thread", where each will
- *   be preceded by a descriptive word.  For processes we can see "Vfork" and
- *   "Fork".  For threads we see "Create".  Note that while "Create " is initial
- *   caps, both "process" and "thread" are lowercase but visually modified
+ *   be preceded by a descriptive word, or in the event of an `exec` the first
+ *   inline child will contain the command line.  For processes we can see "Vfork"
+ *   and "Fork".  For threads we see "Create".  Note that while "Create " is
+ *   initial-caps, both "process" and "thread" are lowercase but visually modified
  *   through the use of the `domClass="capitalize"` on the block/treeItem.
- * - "process" nodes sometimes have a 2-layer structure.  The "root" node will
- *   be a t=inline "Fork process N" where "Fork " is a raw string followed by a
- *   t=task which then wraps t=process with child string "process NNNN".
- *
- *   The first real child may be t=treeItem (because it must have children of its
- *   own to at least describe the thread) whose first t=inline child will be the
- *   command-line.  Its children will then be a combination of "Create thread",
- *   "Fork process", "Exit, status N", or "Exit, fatal signal SIGKILL".  The
- *   exit string will just be an inline string, but will have an associated
- *   focus attribute.
- *
- *   Note that in some cases the "Exit" nodes seem to be at the samee level as
+ * - Note that in some cases the "Exit" nodes seem to be at the samee level as
  *   the command line arguments.  This seems like it might be when a signal
  *   kills the process rather than the process exiting cleanly?  Either way we
  *   don't currently care about exiting.
@@ -1299,49 +1302,60 @@ function grokTreeItem(rootPml, ctx, mode) {
       return;
     }
 
-    // This is where labeling text like "Create " exists; we skip it.
-    const taskNode = ctx.pickFirstChildOfType(infoKid, "task");
-    if (!taskNode) {
-      return;
+    // This is an `exec` if the inline payload is the arguments.
+    //
+    // We originally tried to just reach into the children to find the exec
+    // because it seemed like that was an inherent part of the structure, but at
+    // least one rebuilt old trace seemed to regularly have forks before the exec
+    // so now when we detect an exec we fix-up the info for our current process.
+    const isExec = ctx.firstChildIsStringAndStartsWith(infoKid, "/");
+    let isProcess, taskNode;
+    if (isExec) {
+      const args = ctx.pickAndExtractStrings(infoKid);
+      let name = args[0];
+      const idxLastSlash = name.lastIndexOf("/");
+      if (idxLastSlash > -1) {
+        name = name.substring(idxLastSlash + 1);
+      }
+      inProc.name = name;
+      inProc.args = args;
+      isProcess = true;
+    } else {
+      // Otherwise the child should be a task node.
+      // This is where labeling text like "Create " exists; we skip it.
+      taskNode = ctx.pickFirstChildOfType(infoKid, "task");
+      if (!taskNode) {
+        return;
+      }
+
+      isProcess = taskNode.c[0].t === "process";
     }
 
-    const isProcess = taskNode.c[0].t === "process";
     // If this is a process,
     if (isProcess) {
-      const procNode = taskNode.c[0];
-      let containerNode, args, name;
 
-      if (pml.c[1]?.t === "treeItem") {
-        containerNode = pml.c[1];
-        args = ctx.pickAndExtractStrings(containerNode.c[0]);
-        name = args[0];
-        const idxLastSlash = name.lastIndexOf("/");
-        if (idxLastSlash > -1) {
-          name = name.substring(idxLastSlash + 1);
-        }
+      let thisProc;
+      if (!isExec) {
+        const procNode = taskNode.c[0];
+        const tuid = procNode.a.tuid; // same info also on the taskNode.
+
+        const threads = [];
+        thisProc = {
+          kind: "process",
+          puid: tuid,
+          tuid,
+          name: inProc?.name,
+          args: null,
+          threads,
+        };
+        processes.push(thisProc);
+        threadMap.set(normTuid(tuid), thisProc);
       } else {
-        containerNode = pml;
-        args = null;
-        // let's assume a fork-server idiom and we can inherit our parent
-        // process name;
-        name = inProc.name;
+        thisProc = inProc;
       }
-      const tuid = procNode.a.tuid; // same info also on the taskNode.
 
-      const threads = [];
-      const thisProc = {
-        kind: "process",
-        puid: tuid,
-        tuid,
-        name,
-        args,
-        threads,
-      };
-      processes.push(thisProc);
-      threadMap.set(normTuid(tuid), thisProc);
-
-      for (let iNode = 1; iNode < containerNode.c.length; iNode++) {
-        const node = containerNode.c[iNode];
+      for (let iNode = 1; iNode < pml.c.length; iNode++) {
+        const node = pml.c[iNode];
         // It's possible is something like an "Exit..." line we want to skip.
         if (ctx.isSoleString(node)) {
           continue;
@@ -1349,8 +1363,6 @@ function grokTreeItem(rootPml, ctx, mode) {
 
         chewItem(node, thisProc);
       }
-      // note that pml.c[2] onwards may exist, but we currently believe that to
-      // be a special-case "Exit"
     } else { // it's a thread
       const threadNode = taskNode.c[0];
       const tuid = threadNode.a.tuid;
@@ -1369,7 +1381,7 @@ function grokTreeItem(rootPml, ctx, mode) {
 
   console.log("Chewing root", rootPml);
 
-  chewItem(rootPml, 0);
+  chewItem(rootPml, null);
   return { processes };
 }
 
@@ -1574,7 +1586,7 @@ export function normalizePmlPayload(payload) {
       continue;
     }
     for (const node of row.items) {
-      // Note that the parent balue is a string, as is the containerId payload.
+      // Note that the parent value is a string, as is the containerId payload.
       if (node.parent) {
         parentedNodes.set(node.parent, node);
       } else {

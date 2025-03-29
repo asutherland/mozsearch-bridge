@@ -24,8 +24,8 @@
 import { RuntimeConnectListeningHandler } from './msg_handler.js';
 
 export class BridgeServer extends RuntimeConnectListeningHandler {
-  constructor(args) {
-    super(args);
+  constructor(args, options = {}) {
+    super(args, options);
 
     if (args.pclient) {
       this.pclient = args.pclient;

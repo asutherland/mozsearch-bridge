@@ -110,6 +110,7 @@ async function buildRangeQuery(pclient, mixArgs, limit=50) {
         lines: limit
       },
     }, mixArgs),
+    focusMoment,
   ];
 }
 
@@ -391,7 +392,8 @@ class ContentScriptServer extends BridgeServer {
     console.log('processing range query', name, mixArgs);
     let beforeQueryId, afterQueryId;
     try {
-      const [beforeReq, afterReq] = await buildRangeQuery(this.pclient, mixArgs, limit || 50);
+      const useLimit = limit || 50;
+      const [beforeReq, afterReq, focusMoment] = await buildRangeQuery(this.pclient, mixArgs, useLimit);
       console.log("query", name, beforeReq, afterReq);
       const beforeHandler = new BatchHandler();
       beforeQueryId = this._openQuery(name, cloneData(beforeReq), wrapActiveInto(beforeHandler));
@@ -409,8 +411,14 @@ class ContentScriptServer extends BridgeServer {
       beforeResults.reverse();
 
       const results = [...beforeResults, ...afterResults];
+      const extra = {
+        focusMoment,
+        beforeCount: beforeResults.length,
+        afterCount: afterResults.length,
+        limit: useLimit,
+      };
 
-      reply(results);
+      reply(results, extra);
     } finally {
       // Ensure we always terminate the query on the way out if initialized and
       // we're not sure it closed.

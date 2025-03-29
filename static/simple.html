@@ -2,7 +2,9 @@
 <html>
   <head>
     <link href="simple.css" rel="stylesheet">
+    <link href="LineUpJS.css" rel="stylesheet">
     <link href="vis-timeline.custom.css" rel="stylesheet">
+    <script src="LineUpJS.js"></script>
     <script type="module" src="simple.js"></script>
     <title>Mozsearch Bridge UI</title>
   </head>
@@ -21,7 +23,7 @@
         <div id="tab-executions" class="tab active">
         <input id="symbol-name" type="text" size="100" placeholder="symbol" />
         <input id="symbol-print" type="text" size="40" placeholder="print expression" />
-        <input id="show-symbol" type="button" value="Show Symbol Executions" />
+        <input id="show-symbol-executions" type="button" value="Show Symbol Executions" />
       </div>
       <div id="tab-eval" class="tab" hidden=true>
         <input id="eval-symbol-name" type="text" size="100" placeholder="symbol" />
@@ -44,6 +46,7 @@
         <input id="show-task-tree" type="button" value="Show All Tasks (Task Tree)" />
         <input id="show-stack" type="button" value="Show Current Stack" />
         <input id="show-stdouterr" type="button" value="Show Current Stdouterr" />
+        <input id="show-logs" type="button" value="Show Logs Near Now" />
       </div>
       </div>
     </div>
@@ -81,6 +84,17 @@
               Automatic Magic
             </label>
           </div>
+          <div id="output-show-as-lineup-container">
+            <input
+              id="output-show-as-lineup"
+              type="radio"
+              name="show-as"
+              value="lineup"
+              >
+            <label for="output-show-as-lineup">
+              LineUp Table
+            </label>
+          </div>
           <div id="output-show-as-timeline-container">
             <input
               id="output-show-as-timeline"
@@ -90,6 +104,17 @@
               >
             <label for="output-show-as-timeline">
               Timeline (Click to focus+interact / escape to unfocus)
+            </label>
+          </div>
+          <div id="output-show-as-logs-container">
+            <input
+              id="output-show-as-logs"
+              type="radio"
+              name="show-as"
+              value="logs"
+              >
+            <label for="output-show-as-logs">
+              Logs (Text)
             </label>
           </div>
           <div id="output-show-as-raw-container">

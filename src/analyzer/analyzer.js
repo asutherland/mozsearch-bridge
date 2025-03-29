@@ -4,6 +4,7 @@ import bounds from 'binary-search-bounds';
 import { grokPML, grokPMLRows, grokStructured } from '../pmlgrok/grokker.js';
 
 import { HierNode, HierBuilder } from './diagramming/core_diagram.js';
+import { cmpMoment } from '../pmlgrok/utils.js';
 
 
 function shortSymbolName(name) {
@@ -39,33 +40,6 @@ function makePuidPtr(puid, ptr) {
 function makePuidPtrUsingFocusInfo(focusInfo, ptr) {
   const puid = focusInfo.frame.addressSpaceUid.task;
   return makePuidPtr(puid, ptr);
-}
-
-function cmpMoment(a, b) {
-  if (!a || !b) {
-    if (b) {
-      return 1;
-    }
-    if (a) {
-      return -1;
-    }
-    return 0;
-  }
-
-  if (a.event < b.event) {
-    return -1;
-  }
-  if (a.event > b.event) {
-    return 1;
-  }
-  // a.event === b.event
-  if (a.instr < b.instr) {
-    return -1;
-  }
-  if (a.instr > b.instr) {
-    return 1;
-  }
-  return 0;
 }
 
 // Given a symbol name, pop off the last segment assuming it's a method.

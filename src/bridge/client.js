@@ -2,14 +2,20 @@
  * For code that wants to talk to a pernosco endpoint.
  **/
 
+import { IDBCacheHelper } from '../analyzer/idb_cache_helper.js';
 import { RuntimeConnectIssuingHandler } from './msg_handler.js';
 
 export class BridgeClient extends RuntimeConnectIssuingHandler {
   constructor({ onStatusReport, normalizeReceivedPayload }) {
-    // This is fairly hacky, but to start, we just tunnel the session id through
-    // the hash, but we probably should be trying to use a tab weakmap or
+    // We tunnel the session id through the searchParams (previously via the
+    // hash), but we probably should be trying to use a tab weakmap or
     // equivalent.  That would help with the reloads.
-    super('client', document.location.hash.slice(1));
+    const urlParams = new URLSearchParams(window.location.search);
+
+    const traceName = urlParams.get("trace");
+    const cacheHelper = new IDBCacheHelper({ traceName });
+
+    super('client', urlParams.get("sess"), { cacheHelper });
     document.location.hash = "";
 
     this.statusReport = null;

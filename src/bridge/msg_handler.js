@@ -12,12 +12,14 @@ export class MessageHandler {
   #nextId;
   #awaitingReplyPromises;
   #awaitingPortQueue;
+  #cacheHelper;
 
-  constructor(roleType) {
+  constructor(roleType, { cacheHelper }) {
     this.roleType = roleType;
     this.#nextId = 1;
     this.#awaitingReplyPromises = new Map();
     this.#awaitingPortQueue = [];
+    this.#cacheHelper = cacheHelper;
 
     this.port = null;
   }
@@ -58,7 +60,19 @@ export class MessageHandler {
     });
   }
 
-  sendMessageAwaitingReply(type, payload) {
+  async sendMessageAwaitingReply(type, payload) {
+    if (this.#cacheHelper) {
+      const maybeResult = await this.#cacheHelper.lookup(this, type, payload);
+      if (maybeResult) {
+        console.log("using cached result", maybeResult);
+        return maybeResult;
+      } else if (maybeResult === undefined) {
+        console.log("query was not cacheable");
+      } else if (maybeResult === null) {
+        console.log("query cache miss");
+      }
+    }
+
     const replyId = `reply${this.#nextId++}`;
 
     let resolve, reject;
@@ -68,10 +82,16 @@ export class MessageHandler {
     });
 
     this.#awaitingReplyPromises.set(replyId, { resolve, reject });
-
     this._sendMessageAwaitingReply(type, payload, replyId);
 
-    return promise;
+    const [result, extra] = await promise;
+    if (this.#cacheHelper) {
+      // We await this to allow the cacheHelper to have the flexibility to delay
+      // things if it has a really good reason, but ideally it shouldn't.
+      const stored = await this.#cacheHelper.store(this, type, payload, result, extra);
+      console.log("result of trying to cache the result:", stored);
+    }
+    return result;
   }
 
   // This is a hook to allow for normalization of PML responses, in particular,
@@ -105,7 +125,7 @@ export class MessageHandler {
       }
       const { resolve } = this.#awaitingReplyPromises.get(msg.msgId);
 
-      resolve(this._normalizeReceivedPayload(msg.payload));
+      resolve([this._normalizeReceivedPayload(msg.payload), msg.extra]);
       this.#awaitingReplyPromises.delete(msg.msgId);
       return;
     }
@@ -115,11 +135,12 @@ export class MessageHandler {
     let replyFunc;
     if ('replyId' in msg) {
       const replyId = msg.replyId;
-      replyFunc = (payload) => {
+      replyFunc = (payload, extra) => {
         this._postMessage({
           type: 'reply',
           msgId: replyId,
           payload,
+          extra,
         });
       };
     }
@@ -148,8 +169,8 @@ export class MessageHandler {
  * MessageHandler that waits for a connection.
  */
 export class RuntimeConnectListeningHandler extends MessageHandler {
-  constructor(roleType) {
-    super(roleType);
+  constructor(roleType, options) {
+    super(roleType, options);
 
     browser.runtime.onConnect.addListener(this.#onConnect.bind(this))
   }
@@ -174,8 +195,8 @@ export class RuntimeConnectListeningHandler extends MessageHandler {
  * MessageHandler that initiates a connection to the background page.
  */
 export class RuntimeConnectIssuingHandler extends MessageHandler {
-  constructor(roleType, name) {
-    super(roleType);
+  constructor(roleType, name, options) {
+    super(roleType, options);
 
     console.log("Opening port with name:", name);
     const port = browser.runtime.connect({ name });
