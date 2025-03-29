@@ -820,7 +820,7 @@ class Analyzer {
                 'last-line',
                 {
                   name: 'breakpoint',
-                  limit: 222,
+                  limit: 250,
                   mixArgs: {
                     params: {
                       url: useSourceUrl,

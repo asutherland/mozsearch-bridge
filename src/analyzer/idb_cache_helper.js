@@ -85,6 +85,11 @@ export class IDBCacheHelper {
         return [params.symbol, ...(params.print || [])];
       }
 
+      if (name === "breakpoint") {
+        const params = payload.mixArgs.params;
+        return [params.url, params.points[0].l, params.points[0].c, ...(params.print || [])];
+      }
+
       // rangeQuery {name: "stdouterr"} has no extra params
       if (name === "stdouterr") {
         return [];
