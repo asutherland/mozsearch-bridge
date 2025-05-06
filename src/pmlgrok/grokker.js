@@ -833,9 +833,79 @@ function grokValue(pml, ctx) {
  * (for ClientManagerService::AddSource) where we have a complex return type
  * (`nsIDToCString` is an object with `char mStringBytes[NSID_LENGTH];`) we may
  * see an object structure.
+ *
+ * ### ';'-delimited list of print results
+ *
+ * Here's the full context, but note that
+ *
+ * t=block (cyan)
+ * - t=inline (red)
+ *   - t=inline (yellow) [focus] itemShortHand/itemTypeName
+ *     - t=ident (blue)
+ *       - t=inline elided
+ *         - 'mozilla'
+ *       - '::dom::ClientMatchPrincipalInfo'
+ *     - '('
+ *     - ...
+ *     - ')'
+ *     - '='
+ *     - t=inline (blue) producer/renderer/dataMoment
+ *       - t=ident value{}
+ *         - 'true'
+ *   - '→'
+ *   - t=inline (yellow) producer/renderer/dataMoment
+ *     - t=inline (blue)
+ *       - '{'
+ *       - t=inline (green) collapsible
+ *         - t=inline (red) producer/renderer/dataMoment
+ *           - t=inline (cyan)
+ *             - t=ident locationText={}
+ *               - 'attrs_' (key name)
+ *             - '='
+ *           - t=inline (cyan)
+ *             - '{'
+ *             - t=inline (pink) collapsible=null
+ *               - t=inline (yellow) producer/renderer
+ *                 - '{'
+ *                 - t=inline (blue) producer/renderer/dataMoment
+ *                   - t=inline (green)
+ *                     - t=ident (red) producer/renderer/dataMoment
+ *                       - 'mIsAnyMemberPresent' (key)
+ *                     - '='
+ *                   - t=inline (green) value={}
+ *                     - 'true'
+ *                 - '}'
+ *               - ','
+ *               - t=inline (yellow) producer/renderer/dataMoment
+ *                 - t=inline (blue)
+ *                   - t=ident (green) locationText={}
+ *                     - 'mFirstPartyDomain' (key)
+ *                   - '='
+ *                 - t=inline (blue) value={}
+ *                   - '"'
+ *                   - t=str with no children (empty string, but if there were
+ *                     it would have a JS string as a child and there would be
+ *                     attrs: charBytes="JS chars", charSpec={producer/renderer})
+ *                   - '"'
+ *         - ','
+ *         - t=inline (red) producer/renderer/dataMoment
+ *         - (',' t=inline (red) repeats)
+ *       - '}'
+ *   - ','
+ *   - t=inline (yellow) producer/renderer/dataMoment
+ *     - (same as above)
+ *
  */
 function grokPrinted(pml, ctx) {
-  if (!ctx.isInline(pml) || pml.c.length !== 1) {
+  // At least in the detailed case above, objects now seem to have an outer
+  // t=inline with the dataMoment and then a t=inline inside that which just
+  // contains the delimiting.
+  let looksObjecty = !ctx.isInline(pml) || pml.c.length !== 1;
+  if (!looksObjecty && ctx.hasWrappingDelims(pml.c[0], "{", "}")) {
+    looksObjecty = true;
+    pml = pml.c[0];
+  }
+  if (looksObjecty) {
     let asObj = ctx.runGrokkerOnNode(grokObject, pml, "printed");
 
     if (asObj?.values) {
@@ -1549,6 +1619,7 @@ function grokRootPML(ctx, pml, mode, results, focus) {
 
   let result;
   if (printWrapped) {
+    // See `grokPrinted` block comment for a full example
     result = ctx.parsify(
       topPml,
       [
