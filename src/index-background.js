@@ -84,3 +84,41 @@ async function showSimpleUI(pernoscoTab) {
 }
 
 browser.browserAction.onClicked.addListener(showSimpleUI);
+
+async function searchfoxContextMenuClicked(info, tab) {
+  // ## Standards Specs Processing
+  //
+  // Info potentially contains { linkText, linkUrl, pageUrl, targetElementId },
+  // with the links only being available in the "link" context, but the others
+  // always being available.  If we were running in a content script we could
+  // also use `menus.getTargetElement()` but we currently only run as a
+  // background script because we are currently trying to avoid injecting
+  // content scripts unless needed.
+  //
+  // The situations are generally going to be:
+  // - A def/dfn: We will only have an id and it will be the id of the dfn in
+  //   the spec.  But we also will have the pageUrl and combining those two
+  //   gives us a full usable absolute URL.
+  // - A use that references a def/dfn elsewhere: We expect to have the linkUrl
+  //   and we expect the id to look like "ref-for-{dfn id}{optional circled digits}".
+  //   The {dfn id} of course could be for a definition in another document and
+  //   whether it is will be clear from the actual link URL.  Currently the
+  //   normal searchfox semantics don't actually care about the specific use
+  //   we click on for the diagram options, so we don't currently need to do
+  //   anything with these "ref-for" cases, we just need to process the link.
+  //
+  // 
+  //
+}
+
+browser.contextMenus.create({
+    id: "mozsearch-diagram-uses",
+    title: "Uses diagram",
+    contexts: ["link", "page"],
+  });
+  browser.contextMenus.create({
+    id: "mozsearch-diagram-calls",
+    title: "Calls diagram",
+    contexts: ["link", "page"],
+  });
+browser.contextMenus.onClicked.addListener(searchfoxContextMenuClicked)
